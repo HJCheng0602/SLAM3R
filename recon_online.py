@@ -80,13 +80,9 @@ parser.add_argument('--save_for_eval', action='store_true', help='whether to sav
 
 class IncrementalReconstructor:
     """
-    一个增量式的点云重建器，用于高效处理在线数据流。
-    它会内部维护和更新一个聚合后的点云，避免了重复的全量拼接。
+    A class used for reconstruting the pts incrementally
     """
     def __init__(self):
-        """
-        初始化一个空的重建器。
-        """
         self.res_pcds = None
         self.res_rgbs = None
         self.res_confs = None
@@ -95,23 +91,20 @@ class IncrementalReconstructor:
 
     def add_frame(self, view: dict, img: np.ndarray, conf: np.ndarray = None, valid_mask: np.ndarray = None):
         """
-        增量式地添加一帧新的视角数据。
+        Incrementally add a new frame of view data.
 
         Args:
-            view (dict): 单个新视角的数据字典。
-            img (np.ndarray): 对应的RGB图像。
-            conf (np.ndarray, optional): 对应的置信度分数。
-            valid_mask (np.ndarray, optional): 对应的有效性掩码。
+            view (dict): a dictionary for a new view
+            img (np.ndarray): rgb_img
+            conf (np.ndarray, optional): 
+            valid_mask (np.ndarray, optional): 
         """
-        # 1. 提取新一帧的点云和颜色
         try:
             new_pcd = to_numpy(view['pts3d_world']).reshape(-1, 3)
             new_rgb = to_numpy(img).reshape(-1, 3)
         except KeyError:
             print(f"Warning: 'pts3d_world' not found in the new view. Frame skipped.")
             return
-
-        # 2. 如果是第一帧，直接用它来初始化聚合点云
         if not self.is_initialized:
             self.res_pcds = new_pcd
             self.res_rgbs = new_rgb
@@ -120,7 +113,6 @@ class IncrementalReconstructor:
             if valid_mask is not None:
                 self.res_valid_masks = to_numpy(valid_mask).reshape(-1)
             self.is_initialized = True
-        # 3. 如果不是第一帧，将新数据高效地追加到已有的聚合点云后面
         else:
             self.res_pcds = np.concatenate([self.res_pcds, new_pcd], axis=0)
             self.res_rgbs = np.concatenate([self.res_rgbs, new_rgb], axis=0)
@@ -133,22 +125,12 @@ class IncrementalReconstructor:
 
     def save_snapshot(self, snapshot_id: int, save_dir: str, num_points_save: int = 200000, conf_thres_res: float = 3.0):
         """
-        对当前聚合的点云进行过滤、降采样，并保存快照。
-        这个方法的逻辑与原函数后半部分几乎完全一样。
-
-        Args:
-            snapshot_id (int): 快照序号。
-            save_dir (str): 保存目录。
-            num_points_save (int): 降采样点数。
-            conf_thres_res (float): 置信度阈值。
+        Just save
         """
         if not self.is_initialized:
             print("Warning: Reconstructor not initialized. Nothing to save.")
             return
-
         save_name = f"recon_snapshot_{snapshot_id:05d}.ply"
-        
-        # 点云过滤逻辑
         pts_count = len(self.res_pcds)
         final_valid_mask = np.ones(pts_count, dtype=bool)
 
@@ -166,13 +148,9 @@ class IncrementalReconstructor:
             return
             
         print(f'Snapshot {snapshot_id}: Ratio of points filtered out: {(1. - len(valid_ids) / pts_count) * 100:.2f}%')
-
-        # 降采样逻辑
         n_samples = min(num_points_save, len(valid_ids))
         print(f"Snapshot {snapshot_id}: Resampling {n_samples} points from {len(valid_ids)} valid points.")
         sampled_idx = np.random.choice(valid_ids, n_samples, replace=False)
-
-        # 保存快照
         sampled_pts = self.res_pcds[sampled_idx]
         sampled_rgbs = self.res_rgbs[sampled_idx]
         save_path = join(save_dir, save_name)
@@ -807,17 +785,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         print(f">> saving per-frame predictions to {preds_dir}")
         np.save(join(preds_dir, 'registered_pcds.npy'), torch.cat(per_frame_res['l2w_pcds']).cpu().numpy())
         np.save(join(preds_dir, 'registered_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['l2w_confs']]).numpy())
-
-
-
-            
-            
-
-        
-        
-
-
-
 
 if __name__ == "__main__":
 
