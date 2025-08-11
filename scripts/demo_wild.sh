@@ -14,7 +14,7 @@ start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
 TEST_NAME="wild_demo"
-KEYFRAME_STRIDE=-1     #-1 for auto-adaptive keyframe stride selection
+KEYFRAME_STRIDE=3     #-1 for auto-adaptive keyframe stride selection
 WIN_R=5
 MAX_NUM_REGISTER=10
 NUM_SCENE_FRAME=10
