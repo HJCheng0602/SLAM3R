@@ -156,6 +156,65 @@ def load_images(folder_or_list, size, square_ok=False,
         print(f' ({len(imgs)} images loaded)')
     return imgs
 
+def process_single_frame(frame_array, size=224, idx=0):
+    """
+    Processes a single video frame in NumPy array format and converts it
+    into a dictionary with a specific format.
+
+    Args:
+        frame_array (np.ndarray): The video frame from cv2.VideoCapture.read().
+        size (int): The target size for the resized and cropped image.
+        idx (int): The frame index, used for metadata.
+
+    Returns:
+        dict: A dictionary containing the processed image data and metadata.
+    """
+    
+    # 1. Convert the NumPy array to a PIL.Image object
+    # The BGR to RGB conversion is necessary because OpenCV's default
+    # color space (BGR) differs from PIL's (RGB).
+    if frame_array.ndim == 3 and frame_array.shape[2] == 3:
+        img_pil = PIL.Image.fromarray(cv2.cvtColor(frame_array, cv2.COLOR_BGR2RGB))
+    else:
+        img_pil = PIL.Image.fromarray(frame_array)
+
+    W1, H1 = img_pil.size
+    
+    # 2. Core processing logic: resize and crop to match the model's input requirements
+    if size == 224:
+        # Resize the shorter side to 224 and then crop to a 224x224 square
+        scale = size / min(H1, W1)
+        new_width, new_height = int(W1 * scale), int(H1 * scale)
+        img_pil = img_pil.resize((new_width, new_height), resample=PIL.Image.BICUBIC)
+        
+        # Crop the center region
+        left = (new_width - size) // 2
+        top = (new_height - size) // 2
+        right = (new_width + size) // 2
+        bottom = (new_height + size) // 2
+        img_pil = img_pil.crop((left, top, right, bottom))
+    else:
+        # Resize the longer side to the specified size
+        scale = size / max(H1, W1)
+        new_width, new_height = int(W1 * scale), int(H1 * scale)
+        img_pil = img_pil.resize((new_width, new_height), resample=PIL.Image.BICUBIC)
+
+    # 3. Normalize and convert to a tensor
+    # transforms.ToTensor() converts the PIL Image to a [0, 1] float tensor
+    to_tensor_norm = tvf.transforms.ToTensor()
+    img_tensor = to_tensor_norm(img_pil)[None]  # Add a batch dimension
+
+    # 4. Encapsulate data into a dictionary
+    processed_img_dict = dict(
+        img=img_tensor,
+        true_shape=np.int32([img_pil.size[::-1]]),
+        idx=idx,
+        instance=str(idx),
+        label=f"online_stream_frame_{idx}"
+    )
+
+    return processed_img_dict
+
 
 
 def crop_and_resize(image, depthmap, intrinsics, long_size, rng=None, info=None, use_crop=False):

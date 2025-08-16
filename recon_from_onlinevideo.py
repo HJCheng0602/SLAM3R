@@ -8,12 +8,15 @@ import json
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import open3d as o3d
 plt.ion()
 
 from slam3r.datasets.wild_seq import Seq_Data
 from slam3r.models import Image2PointsModel, Local2WorldModel, inf
 from slam3r.utils.device import to_numpy
 from slam3r.utils.recon_utils import * 
+from datasets_preprocess.get_webvideo import *
+from slam3r.utils.image import process_single_frame
 
 parser = argparse.ArgumentParser(description="Inference on a wild captured scene")
 parser.add_argument("--device", type=str, default='cuda', help="pytorch device")
@@ -28,7 +31,7 @@ parser.add_argument("--l2w_weights", type=str, help="path to the weights of l2w 
 input_group = parser.add_mutually_exclusive_group(required=True)
 input_group.add_argument("--dataset", type=str, help="a string indicating the dataset")
 input_group.add_argument("--img_dir", type=str, help="directory of the input images")
-parser.add_argument("--save_dir", type=str, default="results", help="directory to save the results")
+parser.add_argument("--save_dir", type=str, default="results", help="directory to save the results") 
 parser.add_argument("--test_name", type=str, required=True, help="name of the test")
 parser.add_argument('--save_all_views', action='store_true', help='whether to save all views respectively')
 
@@ -52,8 +55,10 @@ parser.add_argument("--num_points_save", type=int, default=2000000,
                     help="number of points to be saved in the final reconstruction")
 parser.add_argument("--norm_input", action="store_true", 
                     help="whether to normalize the input pointmaps for l2w model")
-parser.add_argument("--save_frequency", type=int,default=1,
+parser.add_argument("--save_frequency", type=int,default=3,
                     help="per xxx frame to save")
+parser.add_argument("--save_fer_frame",type=bool,default=True,
+                    help="whether to save each frame to .ply")
 
 parser.add_argument("--update_buffer_intv", type=int, default=1, 
                     help="the interval of updating the buffering set")
@@ -76,55 +81,67 @@ parser.add_argument("--seed", type=int, default=42, help="seed for python random
 parser.add_argument('--gpu_id', type=int, default=-1, help='gpu id, -1 for auto select')
 parser.add_argument('--save_preds', action='store_true', help='whether to save all per-frame preds')    
 parser.add_argument('--save_for_eval', action='store_true', help='whether to save partial per-frame preds for evaluation')   
-
+parser.add_argument("--streamurl",type=str,default="http://rab:12345678@192.168.137.83:8081",help="the url of your ip camera, with a form like http://username:password@192.168.137.83:8081")
 
 class IncrementalReconstructor:
-    def __init__(self):
+    def __init__(self, enable_viewer=True):
         self.res_pcds = None
         self.res_rgbs = None
         self.res_confs = None
         self.res_valid_masks = None
         self.is_initialized = False
-
-    def add_frame(self, view: dict, img: np.ndarray, conf: np.ndarray = None, valid_mask: np.ndarray = None):
-        try:
-            new_pcd = to_numpy(view['pts3d_world']).reshape(-1, 3)
-            new_rgb = to_numpy(img).reshape(-1, 3)
-        except KeyError:
-            print(f"Warning: 'pts3d_world' not found in the new view. Frame skipped.")
-            return
-        if not self.is_initialized:
-            self.res_pcds = new_pcd
-            self.res_rgbs = new_rgb
-            if conf is not None:
-                self.res_confs = to_numpy(conf).reshape(-1)
-            if valid_mask is not None:
-                self.res_valid_masks = to_numpy(valid_mask).reshape(-1)
-            self.is_initialized = True
-        else:
-            self.res_pcds = np.concatenate([self.res_pcds, new_pcd], axis=0)
-            self.res_rgbs = np.concatenate([self.res_rgbs, new_rgb], axis=0)
-            if conf is not None:
-                new_conf = to_numpy(conf).reshape(-1)
-                self.res_confs = np.concatenate([self.res_confs, new_conf], axis=0)
-            if valid_mask is not None:
-                new_mask = to_numpy(valid_mask).reshape(-1)
-                self.res_valid_masks = np.concatenate([self.res_valid_masks, new_mask], axis=0)
-
-    def save_snapshot(self, snapshot_id: int, save_dir: str, num_points_save: int = 200000, conf_thres_res: float = 3.0):
-        if not self.is_initialized:
-            print("Warning: Reconstructor not initialized. Nothing to save.")
-            return
-
-        save_name = f"recon_snapshot_{snapshot_id:05d}.ply"
-        pts_count = len(self.res_pcds)
-        final_valid_mask = np.ones(pts_count, dtype=bool)
-
-        if self.res_valid_masks is not None:
-            final_valid_mask &= self.res_valid_masks
         
-        if self.res_confs is not None:
-            conf_masks = self.res_confs > conf_thres_res
+
+        self.vis = None
+        self.pcd = None
+        self.is_viewer_enabled = enable_viewer
+        self.is_running = True # 用于控制可视化循环
+    def run_viewer(self):
+        """运行可视化的主循环，直到窗口被关闭。"""
+        if not self.is_viewer_enabled:
+            return
+
+        while self.is_running:
+            if not self.vis.poll_events():
+                self.is_running = False
+                break
+            # 渲染器更新可以在这里调用，也可以在 save_snapshot 中调用
+            self.vis.update_renderer()
+            time.sleep(0.01)
+
+    def save_snapshot(self, snapshot_id: int, save_dir: str, 
+                    all_pcds: list, all_rgbs: list, all_confs: list, # Correctly receives lists
+                    num_points_save: int = 200000, conf_thres_res: float = 3.0):
+
+        if not all_pcds:
+            print("Warning: No point clouds to save.")
+            return
+
+        # 1. One-time, efficient concatenation into LOCAL variables
+        print(f"Snapshot {snapshot_id}: Concatenating data from {len(all_pcds)} frames...")
+        
+        res_pcds_np = [to_numpy(pcd).reshape(-1, 3) for pcd in all_pcds if pcd is not None]
+        res_rgbs_np = [rgb.reshape(-1, 3) for rgb in all_rgbs if rgb is not None]
+        res_confs_np = [to_numpy(conf).reshape(-1) for conf in all_confs if conf is not None]
+
+        # These lists could be empty if no frames have been processed yet
+        if not res_pcds_np:
+            print(f"Warning for snapshot {snapshot_id}: No valid point cloud data to process.")
+            return
+
+        # Create the local variables
+        res_pcds = np.concatenate(res_pcds_np, axis=0)
+        res_rgbs = np.concatenate(res_rgbs_np, axis=0)
+        res_confs = np.concatenate(res_confs_np, axis=0)
+
+        # 2. Subsequent logic now uses the LOCAL variables
+        pts_count = len(res_pcds)
+        final_valid_mask = np.ones(pts_count, dtype=bool)
+        
+        # FIX 1: Use local `res_confs` instead of `self.res_confs`
+        # Also, check its size, as it's a numpy array, not None.
+        if res_confs.size > 0:
+            conf_masks = res_confs > conf_thres_res # Use local `res_confs`
             final_valid_mask &= conf_masks
 
         valid_ids = np.where(final_valid_mask)[0]
@@ -139,12 +156,47 @@ class IncrementalReconstructor:
         print(f"Snapshot {snapshot_id}: Resampling {n_samples} points from {len(valid_ids)} valid points.")
         sampled_idx = np.random.choice(valid_ids, n_samples, replace=False)
 
-        sampled_pts = self.res_pcds[sampled_idx]
-        sampled_rgbs = self.res_rgbs[sampled_idx]
-        save_path = join(save_dir, save_name)
-        print(f"Saving reconstruction snapshot to {save_path}")
+        # FIX 2: Use local `res_pcds` and `res_rgbs` to sample points. THIS IS THE LINE THAT CRASHED.
+        sampled_pts = res_pcds[sampled_idx]
+        sampled_rgbs = res_rgbs[sampled_idx]
+        
+         # === 根据开关状态决定是否进行可视化更新 ===
+        if self.is_viewer_enabled:
+            # 如果 vis 尚未创建，则创建它。
+            if self.vis is None:
+                self.vis = o3d.visualization.Visualizer()
+                self.vis.create_window(window_name="Realtime Snapshot Viewer")
+                self.pcd = o3d.geometry.PointCloud()
+                self.vis.add_geometry(self.pcd)
+
+            # 更新点云数据
+            self.pcd.points = o3d.utility.Vector3dVector(sampled_pts)
+            self.pcd.colors = o3d.utility.Vector3dVector(sampled_rgbs / 255.0)
+
+            # 强制更新和渲染
+            self.vis.update_geometry(self.pcd)
+            self.vis.reset_view_point(True)
+            self.vis.poll_events()
+            self.vis.update_renderer()
+
+        save_name = f"recon_snapshot_{snapshot_id:05d}.ply"
+        eachframe_dir = join(save_dir, "eachframe")
+        os.makedirs(eachframe_dir, exist_ok=True)
+        save_path = join(eachframe_dir, save_name)
         save_ply(points=sampled_pts, save_path=save_path, colors=sampled_rgbs)
 
+        realtime_save_path = join(save_dir, "realtime_save.ply")
+        temp_realtime_save_path = join(save_dir, "realtime_save.temp.ply")
+        
+        save_ply(points=sampled_pts, save_path=temp_realtime_save_path, colors=sampled_rgbs)
+
+        if os.path.exists(temp_realtime_save_path):
+            try:
+                os.replace(temp_realtime_save_path, realtime_save_path)
+            except PermissionError:
+                print("Warning: Could not replace the PLY file. It is likely being used by another process.")
+            except Exception as e:
+                print(f"Error during file replacement: {e}")
 
 def save_recon(views, pred_frame_num, save_dir, scene_id, save_all_views=False, 
                       imgs=None, registered_confs=None, 
@@ -351,9 +403,9 @@ def initialize_scene(views:list, model:Image2PointsModel, winsize=5, conf_thres=
             init_ref_id = ref_id
 
     # if the best ref_id lead to a bad confidence, decrease the window size and try again
-    if winsize > 3 and max_med_conf < conf_thres:
-        return initialize_scene(views, model, winsize-1, 
-                                conf_thres=conf_thres, return_ref_id=return_ref_id)
+    # if winsize > 3 and max_med_conf < conf_thres:
+    #     return initialize_scene(views, model, winsize-1, 
+    #                             conf_thres=conf_thres, return_ref_id=return_ref_id)
 
     # get the initial point clouds and confidences with the best ref_id
     output = i2p_inference_batch([views[:winsize]], model, ref_id=init_ref_id, 
@@ -371,10 +423,11 @@ def initialize_scene(views:list, model:Image2PointsModel, winsize=5, conf_thres=
     if return_ref_id:
         return initial_pcds, initial_confs, init_ref_id
     return initial_pcds, initial_confs
+    
 
 def scene_recon_pipeline(i2p_model:Image2PointsModel,
                          l2w_model:Local2WorldModel,
-                         dataset, args,
+                        video_api,args,
                          save_dir="results"):
     win_r = args.win_r
     num_scene_frame = args.num_scene_frame
@@ -382,49 +435,41 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     conf_thres_l2w = args.conf_thres_l2w
     conf_thres_i2p = args.conf_thres_i2p
     num_points_save = args.num_points_save
+    kf_stride = args.keyframe_stride
+
 
     reconstructor = IncrementalReconstructor()
 
-    scene_id = dataset.scene_names[0]
-    data_views = dataset[0][:]
-
-    num_views = len(data_views)
-    if 'valid_mask' not in data_views[0]:
-        is_have_mask_rgb = False
-        valid_masks = None
-    else:
-        is_have_mask_rgb = True
-        valid_masks = []
-
+    scene_id = "online_video_output"
+    data_views = []
+    num_views = 0
     rgb_imgs = []
     input_views = []
     res_shapes = []
     res_feats = []
     res_poses = []
     initialize_scene_list = []
-    #decide the stride of sampling keyframes
-    kf_stride = args.keyframe_stride
     local_confs_mean_up2now = []
     adj_distance = kf_stride
     fail_view = {}
 
-
-    initial_winsize = min(initial_winsize, num_views//kf_stride)
     assert initial_winsize >= 2, "not enough views for initializing the scene reconstruction"
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
     registered_confs_mean = []
+    i = -1
+    frame = video_api.get_video_frame()
 
-    for i in range(len(data_views)):
-        
+    while frame is not None:
+        num_views += 1
+        i += 1
         # Pre-save the RGB images along with their corresponding masks
         # in preparation for visualization at last.
+        frame = process_single_frame(frame,224, i)
+        data_views.append(frame)
 
         if data_views[i]['img'].shape[0] == 1:
             data_views[i]['img'] = data_views[i]['img'][0]
         rgb_imgs.append(transform_img(dict(img=data_views[i]['img'][None]))[...,::-1])
-
-        if is_have_mask_rgb:
-            valid_masks.append(data_views[i]['valid_mask'])
         
         # process now image for extracting its img token with encoder
         data_views[i]['img'] = torch.tensor(data_views[i]['img'][None])
@@ -452,6 +497,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
 
         # accumulate the initial window frames
         if i < (initial_winsize - 1)*kf_stride and i % kf_stride == 0:
+            frame = video_api.get_video_frame()
             continue
         elif i == (initial_winsize - 1)*kf_stride:
             initial_pcds, initial_confs, init_ref_id = initialize_scene(input_views[:initial_winsize*kf_stride:kf_stride],
@@ -479,6 +525,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
                 per_frame_res['l2w_pcds'][j*kf_stride] = normed_pts[j]
 
         elif i < (initial_winsize - 1) * kf_stride:
+            frame = video_api.get_video_frame()
             continue
 
 
@@ -552,14 +599,14 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
                 # while the registered_confs_mean of the frames within the initial window is generated by L2W model,
                 # so there exists a gap. Here we try to align it.
                 max_initial_conf_mean = -1
-                for i in range(init_num):
-                    if registered_confs_mean[i*kf_stride] > max_initial_conf_mean:
-                        max_initial_conf_mean = registered_confs_mean[i*kf_stride]
+                for ii in range(init_num):
+                    if registered_confs_mean[ii*kf_stride] > max_initial_conf_mean:
+                        max_initial_conf_mean = registered_confs_mean[ii*kf_stride]
                 factor = max_conf_mean/max_initial_conf_mean
                 # print(f'align register confidence with a factor {factor}')
-                for i in range(init_num):
-                    per_frame_res['l2w_confs'][i*kf_stride] *= factor
-                    registered_confs_mean[i*kf_stride] = per_frame_res['l2w_confs'][i*kf_stride].mean().cpu()
+                for ii in range(init_num):
+                    per_frame_res['l2w_confs'][ii*kf_stride] *= factor
+                    registered_confs_mean[ii*kf_stride] = per_frame_res['l2w_confs'][ii*kf_stride].mean().cpu()
             # register the rest frames with L2W model
             next_register_id = (init_num - 1) * kf_stride + 1
             milestone = init_num * kf_stride + 1
@@ -567,6 +614,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
             max_buffer_size = args.buffer_size
             strategy = args.buffer_strategy
             candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
+            frame = video_api.get_video_frame()
             continue
 
         # start recovering the online views
@@ -692,26 +740,26 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
             fail_view[i] = conf.item()
         print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
         print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
-        reconstructor.add_frame(
-            view=input_views[i],
-            img=rgb_imgs[i],
-            conf=per_frame_res['l2w_confs'][i],
-            valid_mask=valid_masks
-        )
+
         if args.save_online:
             if (i + 1) % args.save_frequency == 0:
+                # 直接调用重构后的 save_snapshot，并传入数据列表
                 reconstructor.save_snapshot(
                     snapshot_id=i + 1,
                     save_dir=save_dir,
+                    all_pcds=per_frame_res['l2w_pcds'],
+                    all_rgbs=rgb_imgs,
+                    all_confs=per_frame_res['l2w_confs'],
                     num_points_save=num_points_save,
                     conf_thres_res=conf_thres_l2w
                 )
+        frame = video_api.get_video_frame()
 
             
     save_recon(input_views, num_views, save_dir, scene_id, 
                       args.save_all_views, rgb_imgs, registered_confs=per_frame_res['l2w_confs'], 
                       num_points_save=num_points_save, 
-                      conf_thres_res=conf_thres_l2w, valid_masks=valid_masks)
+                      conf_thres_res=conf_thres_l2w)
     if args.save_preds:
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)
@@ -772,18 +820,12 @@ if __name__ == "__main__":
     i2p_model.eval()
     l2w_model.eval()
 
-    if args.dataset:
-        print('Loading dataset: ', args.dataset)
-        dataset = eval(args.dataset)
-    elif args.img_dir:
-        dataset = Seq_Data(img_dir=args.img_dir, img_size=224, to_tensor=True)
-    if hasattr(dataset,"set_epoch"):
-        dataset.set_epoch(0)
+    get_api = Get_online_video(args.streamurl)
 
     save_dir = os.path.join(args.save_dir, args.test_name)
     os.makedirs(save_dir, exist_ok=True)
 
-    scene_recon_pipeline(i2p_model, l2w_model, dataset, args, save_dir=save_dir)
+    scene_recon_pipeline(i2p_model, l2w_model,get_api, args, save_dir=save_dir)
             
     
     

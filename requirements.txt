@@ -10,3 +10,5 @@ tensorboard
 pyglet<2
 huggingface-hub[torch]>=0.22
 pycuda
+vedo
+watchdog
