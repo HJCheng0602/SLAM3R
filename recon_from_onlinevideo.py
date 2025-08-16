@@ -95,9 +95,8 @@ class IncrementalReconstructor:
         self.vis = None
         self.pcd = None
         self.is_viewer_enabled = enable_viewer
-        self.is_running = True # 用于控制可视化循环
+        self.is_running = True 
     def run_viewer(self):
-        """运行可视化的主循环，直到窗口被关闭。"""
         if not self.is_viewer_enabled:
             return
 
@@ -105,7 +104,6 @@ class IncrementalReconstructor:
             if not self.vis.poll_events():
                 self.is_running = False
                 break
-            # 渲染器更新可以在这里调用，也可以在 save_snapshot 中调用
             self.vis.update_renderer()
             time.sleep(0.01)
 
@@ -160,20 +158,20 @@ class IncrementalReconstructor:
         sampled_pts = res_pcds[sampled_idx]
         sampled_rgbs = res_rgbs[sampled_idx]
         
-         # === 根据开关状态决定是否进行可视化更新 ===
+
         if self.is_viewer_enabled:
-            # 如果 vis 尚未创建，则创建它。
+
             if self.vis is None:
                 self.vis = o3d.visualization.Visualizer()
                 self.vis.create_window(window_name="Realtime Snapshot Viewer")
                 self.pcd = o3d.geometry.PointCloud()
                 self.vis.add_geometry(self.pcd)
 
-            # 更新点云数据
+
             self.pcd.points = o3d.utility.Vector3dVector(sampled_pts)
             self.pcd.colors = o3d.utility.Vector3dVector(sampled_rgbs / 255.0)
 
-            # 强制更新和渲染
+
             self.vis.update_geometry(self.pcd)
             self.vis.reset_view_point(True)
             self.vis.poll_events()

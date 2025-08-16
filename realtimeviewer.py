@@ -11,8 +11,6 @@ class RealtimePLYViewer:
         self.ply_file_path = os.path.abspath(ply_file_path)
         self.is_paused = False
         self.is_running = True
-        
-        # 使用 Queue 来进行线程间通信
         self.update_queue = Queue()
 
         self.vis = o3d.visualization.VisualizerWithKeyCallback()
@@ -38,12 +36,10 @@ class RealtimePLYViewer:
             self.last_mtime = 0
 
         def on_modified(self, event):
-            # 在另一个线程中运行
             if os.path.abspath(event.src_path) == self.viewer.ply_file_path:
                 current_mtime = os.path.getmtime(self.viewer.ply_file_path)
                 if current_mtime > self.last_mtime:
                     self.last_mtime = current_mtime
-                    # 放入更新请求到队列中
                     self.viewer.update_queue.put(True)
                     print("Update event triggered. Pushed to queue.")
 
@@ -90,21 +86,17 @@ class RealtimePLYViewer:
     def run(self):
         self.observer.start()
         print(f"The real-time viewer has started, monitoring file: {self.ply_file_path}")
-        self.update_geometry() # 初始加载
-        
-        # 使用非阻塞循环来替代 vis.run()
+        self.update_geometry() 
+
         while self.is_running:
-            # 1. 处理窗口事件
             if not self.vis.poll_events():
                 self.is_running = False
                 break
-            
-            # 2. 检查队列中是否有更新请求
+
             if not self.update_queue.empty():
-                self.update_queue.get() # 取出请求
-                self.update_geometry() # 在主线程中更新
-            
-            # 3. 避免 CPU 过高占用
+                self.update_queue.get() 
+                self.update_geometry() 
+
             time.sleep(0.01)
 
         self.observer.stop()
