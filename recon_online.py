@@ -115,7 +115,6 @@ class IncrementalReconstructor:
         if not self.is_initialized:
             print("Warning: Reconstructor not initialized. Nothing to save.")
             return
-
         save_name = f"recon_snapshot_{snapshot_id:05d}.ply"
         pts_count = len(self.res_pcds)
         final_valid_mask = np.ones(pts_count, dtype=bool)
@@ -735,17 +734,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         print(f">> saving per-frame predictions to {preds_dir}")
         np.save(join(preds_dir, 'registered_pcds.npy'), torch.cat(per_frame_res['l2w_pcds']).cpu().numpy())
         np.save(join(preds_dir, 'registered_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['l2w_confs']]).numpy())
-
-
-
-            
-            
-
-        
-        
-
-
-
 
 if __name__ == "__main__":
 
