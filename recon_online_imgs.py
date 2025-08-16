@@ -412,6 +412,8 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     assert initial_winsize >= 2, "not enough views for initializing the scene reconstruction"
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
     registered_confs_mean = []
+    import pdb
+    pdb.set_trace()
 
     for i in range(len(data_views)):
         

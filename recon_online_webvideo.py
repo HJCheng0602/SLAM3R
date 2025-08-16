@@ -57,7 +57,7 @@ parser.add_argument("--norm_input", action="store_true",
                     help="whether to normalize the input pointmaps for l2w model")
 parser.add_argument("--save_frequency", type=int,default=3,
                     help="per xxx frame to save")
-parser.add_argument("--save_fer_frame",type=bool,default=True,
+parser.add_argument("--save_each_frame",action='store_true',default=True,
                     help="whether to save each frame to .ply")
 
 parser.add_argument("--update_buffer_intv", type=int, default=1, 
@@ -66,7 +66,7 @@ parser.add_argument('--buffer_size', type=int, default=100,
                     help='maximal size of the buffering set, -1 if infinite')
 parser.add_argument("--buffer_strategy", type=str, choices=['reservoir', 'fifo'], default='reservoir', 
                     help='strategy for maintaining the buffering set: reservoir-sampling or first-in-first-out')
-parser.add_argument("--save_online", type=bool, default= True, 
+parser.add_argument("--save_online", action='store_true', default= True, 
                     help="whether to save the construct result online.")
 
 #params for auto adaptation of keyframe frequency
@@ -76,6 +76,10 @@ parser.add_argument("--keyframe_adapt_max", type=int, default=20,
                     help="maximal stride of sampling keyframes when auto adaptation")
 parser.add_argument("--keyframe_adapt_stride", type=int, default=1, 
                     help="stride for trying different keyframe stride")
+parser.add_argument("--perframe",type=int,default=3)
+parser.add_argument("--enable_viewer",type=bool,default=False, help="whether to visualize the reconstruct progress.")
+
+
 
 parser.add_argument("--seed", type=int, default=42, help="seed for python random")
 parser.add_argument('--gpu_id', type=int, default=-1, help='gpu id, -1 for auto select')
@@ -84,7 +88,7 @@ parser.add_argument('--save_for_eval', action='store_true', help='whether to sav
 parser.add_argument("--streamurl",type=str,default="http://rab:12345678@192.168.137.83:8081",help="the url of your ip camera, with a form like http://username:password@192.168.137.83:8081")
 
 class IncrementalReconstructor:
-    def __init__(self, enable_viewer=True):
+    def __init__(self, enable_viewer=False):
         self.res_pcds = None
         self.res_rgbs = None
         self.res_confs = None
@@ -436,7 +440,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     kf_stride = args.keyframe_stride
 
 
-    reconstructor = IncrementalReconstructor()
+    reconstructor = IncrementalReconstructor(args.enable_viewer)
 
     scene_id = "online_video_output"
     data_views = []
@@ -456,302 +460,308 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     registered_confs_mean = []
     i = -1
     frame = video_api.get_video_frame()
+    frame_num = 0
 
     while frame is not None:
-        num_views += 1
-        i += 1
-        # Pre-save the RGB images along with their corresponding masks
-        # in preparation for visualization at last.
-        frame = process_single_frame(frame,224, i)
-        data_views.append(frame)
+        if frame_num % args.perframe == 0:
+            num_views += 1
+            frame_num += 1
+            i += 1
+            # Pre-save the RGB images along with their corresponding masks
+            # in preparation for visualization at last.
+            frame = process_single_frame(frame,224, "cuda")
+            data_views.append(frame)
 
-        if data_views[i]['img'].shape[0] == 1:
-            data_views[i]['img'] = data_views[i]['img'][0]
-        rgb_imgs.append(transform_img(dict(img=data_views[i]['img'][None]))[...,::-1])
-        
-        # process now image for extracting its img token with encoder
-        data_views[i]['img'] = torch.tensor(data_views[i]['img'][None])
-        data_views[i]['true_shape'] = torch.tensor(data_views[i]['true_shape'][None])
-        for key in ['valid_mask', 'pts3d_cam', 'pts3d']:
-            if key in data_views[i]:
-                del data_views[key]
-        to_device(data_views[i], device=args.device)
+            if data_views[i]['img'].shape[0] == 1:
+                data_views[i]['img'] = data_views[i]['img'][0]
+            rgb_imgs.append(transform_img(dict(img=data_views[i]['img'][None]))[...,::-1])
+            
+            # process now image for extracting its img token with encoder
+            data_views[i]['img'] = torch.tensor(data_views[i]['img'][None])
+            data_views[i]['true_shape'] = torch.tensor(data_views[i]['true_shape'][None])
+            for key in ['valid_mask', 'pts3d_cam', 'pts3d']:
+                if key in data_views[i]:
+                    del data_views[key]
+            to_device(data_views[i], device=args.device)
 
-        # pre-extract img tokens by encoder, which can be reused 
-        # in the following inference by both i2p and l2w models
-        temp_shape, temp_feat, temp_pose = get_single_img_tokens([data_views[i]], i2p_model, True)
-        res_shapes.append(temp_shape[0])
-        res_feats.append(temp_feat[0])
-        res_poses.append(temp_pose[0])
-        print(f"finish pre-extracting img token of view {i}")
+            # pre-extract img tokens by encoder, which can be reused 
+            # in the following inference by both i2p and l2w models
+            temp_shape, temp_feat, temp_pose = get_single_img_tokens([data_views[i]], i2p_model, True)
+            res_shapes.append(temp_shape[0])
+            res_feats.append(temp_feat[0])
+            res_poses.append(temp_pose[0])
+            print(f"finish pre-extracting img token of view {i}")
 
-        input_views.append(dict(label=data_views[i]['label'],
-                                img_tokens=temp_feat[0],
-                                true_shape=data_views[i]['true_shape'],
-                                img_pos=temp_pose[0]))
-        for key in per_frame_res:
-            per_frame_res[key].append(None)
-        registered_confs_mean.append(i)
+            input_views.append(dict(label=data_views[i]['label'],
+                                    img_tokens=temp_feat[0],
+                                    true_shape=data_views[i]['true_shape'],
+                                    img_pos=temp_pose[0]))
+            for key in per_frame_res:
+                per_frame_res[key].append(None)
+            registered_confs_mean.append(i)
 
-        # accumulate the initial window frames
-        if i < (initial_winsize - 1)*kf_stride and i % kf_stride == 0:
-            frame = video_api.get_video_frame()
-            continue
-        elif i == (initial_winsize - 1)*kf_stride:
-            initial_pcds, initial_confs, init_ref_id = initialize_scene(input_views[:initial_winsize*kf_stride:kf_stride],
-                                                                        i2p_model,
-                                                                        winsize=initial_winsize,
-                                                                        return_ref_id=True)
-            # set up the world coordinates with the initial window
-            init_num = len(initial_pcds)
-            for j in range(init_num):
-                per_frame_res['l2w_confs'][j * kf_stride] = initial_confs[j][0].to(args.device)
-                registered_confs_mean[j * kf_stride] = per_frame_res['l2w_confs'][j * kf_stride].mean().cpu()
-            # initialize the buffering set with the initial window
-            assert args.buffer_size <= 0 or args.buffer_size >= init_num 
-            buffering_set_ids = [j*kf_stride for j in range(init_num)]
-            # set ip the woeld coordinates with frames in the initial window
-            for j in range(init_num):
-                input_views[j*kf_stride]['pts3d_world'] = initial_pcds[j]
-            initial_valid_masks = [conf > conf_thres_i2p for conf in initial_confs]
-            normed_pts = normalize_views([view['pts3d_world'] for view in input_views[:init_num*kf_stride:kf_stride]],
-                                                        initial_valid_masks)
-            for j in range(init_num):
-                input_views[j*kf_stride]['pts3d_world'] = normed_pts[j]
-                # filter out points with low confidence
-                input_views[j*kf_stride]['pts3d_world'][~initial_valid_masks[j]] = 0
-                per_frame_res['l2w_pcds'][j*kf_stride] = normed_pts[j]
+            # accumulate the initial window frames
+            if i < (initial_winsize - 1)*kf_stride and i % kf_stride == 0:
+                frame = video_api.get_video_frame()
+                continue
+            elif i == (initial_winsize - 1)*kf_stride:
+                initial_pcds, initial_confs, init_ref_id = initialize_scene(input_views[:initial_winsize*kf_stride:kf_stride],
+                                                                            i2p_model,
+                                                                            winsize=initial_winsize,
+                                                                            return_ref_id=True)
+                # set up the world coordinates with the initial window
+                init_num = len(initial_pcds)
+                for j in range(init_num):
+                    per_frame_res['l2w_confs'][j * kf_stride] = initial_confs[j][0].to(args.device)
+                    registered_confs_mean[j * kf_stride] = per_frame_res['l2w_confs'][j * kf_stride].mean().cpu()
+                # initialize the buffering set with the initial window
+                assert args.buffer_size <= 0 or args.buffer_size >= init_num 
+                buffering_set_ids = [j*kf_stride for j in range(init_num)]
+                # set ip the woeld coordinates with frames in the initial window
+                for j in range(init_num):
+                    input_views[j*kf_stride]['pts3d_world'] = initial_pcds[j]
+                initial_valid_masks = [conf > conf_thres_i2p for conf in initial_confs]
+                normed_pts = normalize_views([view['pts3d_world'] for view in input_views[:init_num*kf_stride:kf_stride]],
+                                                            initial_valid_masks)
+                for j in range(init_num):
+                    input_views[j*kf_stride]['pts3d_world'] = normed_pts[j]
+                    # filter out points with low confidence
+                    input_views[j*kf_stride]['pts3d_world'][~initial_valid_masks[j]] = 0
+                    per_frame_res['l2w_pcds'][j*kf_stride] = normed_pts[j]
 
-        elif i < (initial_winsize - 1) * kf_stride:
-            frame = video_api.get_video_frame()
-            continue
+            elif i < (initial_winsize - 1) * kf_stride:
+                frame = video_api.get_video_frame()
+                continue
 
 
-        # recover the pointmap of each view in their local coordinates with the I2P model
+            # recover the pointmap of each view in their local coordinates with the I2P model
 
-        # first recover the accumulate views
-        if i == (initial_winsize - 1) * kf_stride:
-            for view_id in range(i + 1):
-                # skip the views in the initial window
-                if view_id in buffering_set_ids:
-                    # trick to mark the keyframe in the initial window
-                    if view_id // kf_stride == init_ref_id:
-                        per_frame_res['i2p_pcds'][view_id] = per_frame_res['l2w_pcds'][view_id].cpu()
-                    else:
-                        per_frame_res['i2p_pcds'][view_id] = torch.zeros_like(per_frame_res['l2w_pcds'][view_id], device="cpu")
-                    per_frame_res['i2p_confs'][view_id] = per_frame_res['l2w_confs'][view_id].cpu()
-                    print(f"finish revocer pcd of frame {view_id} in their local coordinates(in buffer set), with a mean confidence of {per_frame_res['i2p_confs'][view_id].mean():.2f} up to now.")
-                    continue
-                # construct the local window with the initial views
-                sel_ids = [view_id]
-                for j in range(1, win_r + 1):
-                    if view_id - j * adj_distance >= 0:
-                        sel_ids.append(view_id - j * adj_distance)
-                    if view_id + j * adj_distance < i:
-                        sel_ids.append(view_id + j * adj_distance)
-                local_views = [input_views[id] for id in sel_ids]
-                ref_id = 0
-
-                # recover poionts in the initial window, and save the keyframe points and confs
-                output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id,
-                                                tocpu=False, unsqueeze=False)['preds']
-                # save results of the i2p model for the initial window
-                per_frame_res['i2p_pcds'][view_id] = output[ref_id]['pts3d'].cpu()
-                per_frame_res['i2p_confs'][view_id] = output[ref_id]['conf'][0].cpu()
-
-                # construct the input for L2W model
-                input_views[view_id]['pts3d_cam'] = output[ref_id]['pts3d']
-                valid_mask = output[ref_id]['conf'] > conf_thres_i2p
-                input_views[view_id]['pts3d_cam'] = normalize_views([input_views[view_id]['pts3d_cam']],
-                                                                        [valid_mask])[0]
-                input_views[view_id]['pts3d_cam'][~valid_mask] = 0
-
-                local_confs_mean_up2now = [conf.mean() for conf in per_frame_res['i2p_confs'] if conf is not None]
-                print(f"finish revocer pcd of frame {view_id} in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean_up2now).mean():.2f} up to now.")
-
-            # Special treatment: register the frames within the range of initial window with L2W model
-            if kf_stride > 1:
-                max_conf_mean = -1
-                for view_id in tqdm(range((init_num - 1) * kf_stride), desc="pre-registering"):
-                    if view_id % kf_stride == 0:
+            # first recover the accumulate views
+            if i == (initial_winsize - 1) * kf_stride:
+                for view_id in range(i + 1):
+                    # skip the views in the initial window
+                    if view_id in buffering_set_ids:
+                        # trick to mark the keyframe in the initial window
+                        if view_id // kf_stride == init_ref_id:
+                            per_frame_res['i2p_pcds'][view_id] = per_frame_res['l2w_pcds'][view_id].cpu()
+                        else:
+                            per_frame_res['i2p_pcds'][view_id] = torch.zeros_like(per_frame_res['l2w_pcds'][view_id], device="cpu")
+                        per_frame_res['i2p_confs'][view_id] = per_frame_res['l2w_confs'][view_id].cpu()
+                        print(f"finish revocer pcd of frame {view_id} in their local coordinates(in buffer set), with a mean confidence of {per_frame_res['i2p_confs'][view_id].mean():.2f} up to now.")
                         continue
+                    # construct the local window with the initial views
+                    sel_ids = [view_id]
+                    for j in range(1, win_r + 1):
+                        if view_id - j * adj_distance >= 0:
+                            sel_ids.append(view_id - j * adj_distance)
+                        if view_id + j * adj_distance < i:
+                            sel_ids.append(view_id + j * adj_distance)
+                    local_views = [input_views[id] for id in sel_ids]
+                    ref_id = 0
+
+                    # recover poionts in the initial window, and save the keyframe points and confs
+                    output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id,
+                                                    tocpu=False, unsqueeze=False)['preds']
+                    # save results of the i2p model for the initial window
+                    per_frame_res['i2p_pcds'][view_id] = output[ref_id]['pts3d'].cpu()
+                    per_frame_res['i2p_confs'][view_id] = output[ref_id]['conf'][0].cpu()
+
                     # construct the input for L2W model
+                    input_views[view_id]['pts3d_cam'] = output[ref_id]['pts3d']
+                    valid_mask = output[ref_id]['conf'] > conf_thres_i2p
+                    input_views[view_id]['pts3d_cam'] = normalize_views([input_views[view_id]['pts3d_cam']],
+                                                                            [valid_mask])[0]
+                    input_views[view_id]['pts3d_cam'][~valid_mask] = 0
 
-                    l2w_input_views = [input_views[view_id]] + [input_views[id] for id in buffering_set_ids]
-                    # (for defination of ref_ids, seee the doc of l2w_model)
-                    output = l2w_inference(l2w_input_views, l2w_model,
-                                            ref_ids=list(range(1,len(l2w_input_views))),
-                                            device=args.device,
-                                            normalize=args.norm_input)
-                    # process the output of L2W model
-                    input_views[view_id]['pts3d_world'] = output[0]['pts3d_in_other_view'] # 1,224,224,3
-                    conf_map = output[0]['conf'] # 1,224,224
-                    per_frame_res['l2w_confs'][view_id] = conf_map[0] # 224,224
-                    registered_confs_mean[view_id] = conf_map.mean().cpu()
-                    per_frame_res['l2w_pcds'][view_id] = input_views[view_id]['pts3d_world']
+                    local_confs_mean_up2now = [conf.mean() for conf in per_frame_res['i2p_confs'] if conf is not None]
+                    print(f"finish revocer pcd of frame {view_id} in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean_up2now).mean():.2f} up to now.")
+
+                # Special treatment: register the frames within the range of initial window with L2W model
+                if kf_stride > 1:
+                    max_conf_mean = -1
+                    for view_id in tqdm(range((init_num - 1) * kf_stride), desc="pre-registering"):
+                        if view_id % kf_stride == 0:
+                            continue
+                        # construct the input for L2W model
+
+                        l2w_input_views = [input_views[view_id]] + [input_views[id] for id in buffering_set_ids]
+                        # (for defination of ref_ids, seee the doc of l2w_model)
+                        output = l2w_inference(l2w_input_views, l2w_model,
+                                                ref_ids=list(range(1,len(l2w_input_views))),
+                                                device=args.device,
+                                                normalize=args.norm_input)
+                        # process the output of L2W model
+                        input_views[view_id]['pts3d_world'] = output[0]['pts3d_in_other_view'] # 1,224,224,3
+                        conf_map = output[0]['conf'] # 1,224,224
+                        per_frame_res['l2w_confs'][view_id] = conf_map[0] # 224,224
+                        registered_confs_mean[view_id] = conf_map.mean().cpu()
+                        per_frame_res['l2w_pcds'][view_id] = input_views[view_id]['pts3d_world']
+                        
+                        if registered_confs_mean[view_id] > max_conf_mean:
+                            max_conf_mean = registered_confs_mean[view_id]
+                    print(f'finish aligning {(init_num)*kf_stride} head frames, with a max mean confidence of {max_conf_mean:.2f}')
+                    # A problem is that the registered_confs_mean of the initial window is generated by I2P model,
+                    # while the registered_confs_mean of the frames within the initial window is generated by L2W model,
+                    # so there exists a gap. Here we try to align it.
+                    max_initial_conf_mean = -1
+                    for ii in range(init_num):
+                        if registered_confs_mean[ii*kf_stride] > max_initial_conf_mean:
+                            max_initial_conf_mean = registered_confs_mean[ii*kf_stride]
+                    factor = max_conf_mean/max_initial_conf_mean
+                    # print(f'align register confidence with a factor {factor}')
+                    for ii in range(init_num):
+                        per_frame_res['l2w_confs'][ii*kf_stride] *= factor
+                        registered_confs_mean[ii*kf_stride] = per_frame_res['l2w_confs'][ii*kf_stride].mean().cpu()
+                # register the rest frames with L2W model
+                next_register_id = (init_num - 1) * kf_stride + 1
+                milestone = init_num * kf_stride + 1
+                update_buffer_intv = kf_stride*args.update_buffer_intv   # update the buffering set every update_buffer_intv frames
+                max_buffer_size = args.buffer_size
+                strategy = args.buffer_strategy
+                candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
+                frame = video_api.get_video_frame()
+                continue
+
+            # start recovering the online views
+            # skip the views in the initial window
+            if i in buffering_set_ids:
+                # trick to mark the keyframe in the initial window
+                if i // kf_stride == init_ref_id:
+                    per_frame_res['i2p_pcds'][i] = per_frame_res['l2w_pcds'][i].cpu()
+                else:
+                    per_frame_res['i2p_pcds'][i] = torch.zeros_like(per_frame_res['l2w_pcds'][i], device="cpu")
+                per_frame_res['i2p_confs'][i] = per_frame_res['l2w_confs'][i].cpu()
+                continue
+
+            ni = next_register_id
+            max_id = min(ni, num_views - 1)
+            # select sccene frames in the buffering set to work as a global reference
+            cand_ref_ids = buffering_set_ids
+            ref_views, sel_pool_ids = scene_frame_retrieve(
+                [input_views[i] for i in cand_ref_ids],
+                input_views[ni:ni + 1],
+                i2p_model, sel_num=num_scene_frame,
+                depth = 2)
+
+            # construct the local window with the initial views
+            sel_ids = [i]
+            for j in range(1, win_r + 1):
+                if i - j * adj_distance >= 0:
+                    sel_ids.append(i - j * adj_distance)
+            sel_ids += sel_pool_ids
+            local_views = [input_views[id] for id in sel_ids]
+            ref_id = 0
+
+            # recover poionts in the initial window, and save the keyframe points and confs
+            output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id,
+                                            tocpu=False, unsqueeze=False)['preds']
+            # save results of the i2p model for the initial window
+            per_frame_res['i2p_pcds'][i] = output[ref_id]['pts3d'].cpu()
+            per_frame_res['i2p_confs'][i] = output[ref_id]['conf'][0].cpu()
+
+            # construct the input for L2W model
+            input_views[i]['pts3d_cam'] = output[ref_id]['pts3d']
+            valid_mask = output[ref_id]['conf'] > conf_thres_i2p
+            input_views[i]['pts3d_cam'] = normalize_views([input_views[i]['pts3d_cam']],
+                                                                    [valid_mask])[0]
+            input_views[i]['pts3d_cam'][~valid_mask] = 0
+
+            local_confs_mean_up2now = [conf.mean() for conf in per_frame_res['i2p_confs']]
+            
+            
+            print(f"finish revocer pcd of frame {i} in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean_up2now).mean():.2f} up to now.")
+            
+            
+
+            
+
+            # register the source frames in the local coordinates to the world coordinates with L2W model
+            l2w_input_views = ref_views + [input_views[i]]
+            input_view_num = len(ref_views) + 1
+            
+            output = l2w_inference(l2w_input_views, l2w_model,
+                                    ref_ids=list(range(len(ref_views))),
+                                    device=args.device,
+                                    normalize=args.norm_input)
+            
+            # process the output of L2W model
+            src_ids_local = [id + len(ref_views) for id in range(max_id - ni + 1)]
+            src_ids_global = [id for id in range(ni, max_id + 1)]
+
+            output_id = src_ids_local[0] # the id of the output in the output list
+            view_id = src_ids_global[0]    # the id of the view in all views
+            conf_map = output[output_id]['conf'] # 1,224,224
+            input_views[view_id]['pts3d_world'] = output[output_id]['pts3d_in_other_view'] # 1,224,224,3
+            per_frame_res['l2w_confs'][view_id] = conf_map[0]
+            registered_confs_mean[view_id] = conf_map[0].mean().cpu()
+            per_frame_res['l2w_pcds'][view_id] = input_views[view_id]['pts3d_world']
+
+            next_register_id += 1
+
+            # update the buffering set
+            if next_register_id - milestone >= update_buffer_intv:
+                while(next_register_id - milestone >= kf_stride):
+                    candi_frame_id += 1
+                    full_flag = max_buffer_size > 0 and len(buffering_set_ids) >= max_buffer_size
+                    insert_flag = (not full_flag) or ((strategy == 'fifo') or 
+                                                    (strategy == 'reservoir' and np.random.rand() < max_buffer_size/candi_frame_id))
+                    if not insert_flag: 
+                        milestone += kf_stride
+                        continue
+                    # Use offest to ensure the selected view is not too close to the last selected view
+                    # If the last selected view is 0, 
+                    # the next selected view should be at least kf_stride*3//4 frames away
+                    start_ids_offset = max(0, buffering_set_ids[-1]+kf_stride*3//4 - milestone)
+                        
+                    # get the mean confidence of the candidate views
+                    mean_cand_recon_confs = torch.stack([registered_confs_mean[i]
+                                            for i in range(milestone+start_ids_offset, milestone+kf_stride)])
+                    mean_cand_local_confs = torch.stack([local_confs_mean_up2now[i]
+                                            for i in range(milestone+start_ids_offset, milestone+kf_stride)])
+                    # normalize the confidence to [0,1], to avoid overconfidence
+                    mean_cand_recon_confs = (mean_cand_recon_confs - 1)/mean_cand_recon_confs # transform to sigmoid
+                    mean_cand_local_confs = (mean_cand_local_confs - 1)/mean_cand_local_confs
+                    # the final confidence is the product of the two kinds of confidences
+                    mean_cand_confs = mean_cand_recon_confs*mean_cand_local_confs
                     
-                    if registered_confs_mean[view_id] > max_conf_mean:
-                        max_conf_mean = registered_confs_mean[view_id]
-                print(f'finish aligning {(init_num)*kf_stride} head frames, with a max mean confidence of {max_conf_mean:.2f}')
-                # A problem is that the registered_confs_mean of the initial window is generated by I2P model,
-                # while the registered_confs_mean of the frames within the initial window is generated by L2W model,
-                # so there exists a gap. Here we try to align it.
-                max_initial_conf_mean = -1
-                for ii in range(init_num):
-                    if registered_confs_mean[ii*kf_stride] > max_initial_conf_mean:
-                        max_initial_conf_mean = registered_confs_mean[ii*kf_stride]
-                factor = max_conf_mean/max_initial_conf_mean
-                # print(f'align register confidence with a factor {factor}')
-                for ii in range(init_num):
-                    per_frame_res['l2w_confs'][ii*kf_stride] *= factor
-                    registered_confs_mean[ii*kf_stride] = per_frame_res['l2w_confs'][ii*kf_stride].mean().cpu()
-            # register the rest frames with L2W model
-            next_register_id = (init_num - 1) * kf_stride + 1
-            milestone = init_num * kf_stride + 1
-            update_buffer_intv = kf_stride*args.update_buffer_intv   # update the buffering set every update_buffer_intv frames
-            max_buffer_size = args.buffer_size
-            strategy = args.buffer_strategy
-            candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
-            frame = video_api.get_video_frame()
-            continue
-
-        # start recovering the online views
-        # skip the views in the initial window
-        if i in buffering_set_ids:
-            # trick to mark the keyframe in the initial window
-            if i // kf_stride == init_ref_id:
-                per_frame_res['i2p_pcds'][i] = per_frame_res['l2w_pcds'][i].cpu()
-            else:
-                per_frame_res['i2p_pcds'][i] = torch.zeros_like(per_frame_res['l2w_pcds'][i], device="cpu")
-            per_frame_res['i2p_confs'][i] = per_frame_res['l2w_confs'][i].cpu()
-            continue
-
-        ni = next_register_id
-        max_id = min(ni, num_views - 1)
-        # select sccene frames in the buffering set to work as a global reference
-        cand_ref_ids = buffering_set_ids
-        ref_views, sel_pool_ids = scene_frame_retrieve(
-            [input_views[i] for i in cand_ref_ids],
-            input_views[ni:ni + 1],
-            i2p_model, sel_num=num_scene_frame,
-            depth = 2)
-
-        # construct the local window with the initial views
-        sel_ids = [i]
-        for j in range(1, win_r + 1):
-            if i - j * adj_distance >= 0:
-                sel_ids.append(i - j * adj_distance)
-        sel_ids += sel_pool_ids
-        local_views = [input_views[id] for id in sel_ids]
-        ref_id = 0
-
-        # recover poionts in the initial window, and save the keyframe points and confs
-        output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id,
-                                        tocpu=False, unsqueeze=False)['preds']
-        # save results of the i2p model for the initial window
-        per_frame_res['i2p_pcds'][i] = output[ref_id]['pts3d'].cpu()
-        per_frame_res['i2p_confs'][i] = output[ref_id]['conf'][0].cpu()
-
-        # construct the input for L2W model
-        input_views[i]['pts3d_cam'] = output[ref_id]['pts3d']
-        valid_mask = output[ref_id]['conf'] > conf_thres_i2p
-        input_views[i]['pts3d_cam'] = normalize_views([input_views[i]['pts3d_cam']],
-                                                                [valid_mask])[0]
-        input_views[i]['pts3d_cam'][~valid_mask] = 0
-
-        local_confs_mean_up2now = [conf.mean() for conf in per_frame_res['i2p_confs']]
-        
-        
-        print(f"finish revocer pcd of frame {i} in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean_up2now).mean():.2f} up to now.")
-        
-        
-
-        
-
-        # register the source frames in the local coordinates to the world coordinates with L2W model
-        l2w_input_views = ref_views + [input_views[i]]
-        input_view_num = len(ref_views) + 1
-        
-        output = l2w_inference(l2w_input_views, l2w_model,
-                                ref_ids=list(range(len(ref_views))),
-                                device=args.device,
-                                normalize=args.norm_input)
-        
-        # process the output of L2W model
-        src_ids_local = [id + len(ref_views) for id in range(max_id - ni + 1)]
-        src_ids_global = [id for id in range(ni, max_id + 1)]
-
-        output_id = src_ids_local[0] # the id of the output in the output list
-        view_id = src_ids_global[0]    # the id of the view in all views
-        conf_map = output[output_id]['conf'] # 1,224,224
-        input_views[view_id]['pts3d_world'] = output[output_id]['pts3d_in_other_view'] # 1,224,224,3
-        per_frame_res['l2w_confs'][view_id] = conf_map[0]
-        registered_confs_mean[view_id] = conf_map[0].mean().cpu()
-        per_frame_res['l2w_pcds'][view_id] = input_views[view_id]['pts3d_world']
-
-        next_register_id += 1
-
-        # update the buffering set
-        if next_register_id - milestone >= update_buffer_intv:
-            while(next_register_id - milestone >= kf_stride):
-                candi_frame_id += 1
-                full_flag = max_buffer_size > 0 and len(buffering_set_ids) >= max_buffer_size
-                insert_flag = (not full_flag) or ((strategy == 'fifo') or 
-                                                  (strategy == 'reservoir' and np.random.rand() < max_buffer_size/candi_frame_id))
-                if not insert_flag: 
+                    most_conf_id = mean_cand_confs.argmax().item()
+                    most_conf_id += start_ids_offset
+                    id_to_buffer = milestone + most_conf_id
+                    buffering_set_ids.append(id_to_buffer)
+                    # print(f"add ref view {id_to_buffer}")                
+                    # since we have inserted a new frame, overflow must happen when full_flag is True
+                    if full_flag:
+                        if strategy == 'reservoir':
+                            buffering_set_ids.pop(np.random.randint(max_buffer_size))
+                        elif strategy == 'fifo':
+                            buffering_set_ids.pop(0)
+                    # print(next_register_id, buffering_set_ids)
                     milestone += kf_stride
-                    continue
-                # Use offest to ensure the selected view is not too close to the last selected view
-                # If the last selected view is 0, 
-                # the next selected view should be at least kf_stride*3//4 frames away
-                start_ids_offset = max(0, buffering_set_ids[-1]+kf_stride*3//4 - milestone)
-                    
-                # get the mean confidence of the candidate views
-                mean_cand_recon_confs = torch.stack([registered_confs_mean[i]
-                                         for i in range(milestone+start_ids_offset, milestone+kf_stride)])
-                mean_cand_local_confs = torch.stack([local_confs_mean_up2now[i]
-                                         for i in range(milestone+start_ids_offset, milestone+kf_stride)])
-                # normalize the confidence to [0,1], to avoid overconfidence
-                mean_cand_recon_confs = (mean_cand_recon_confs - 1)/mean_cand_recon_confs # transform to sigmoid
-                mean_cand_local_confs = (mean_cand_local_confs - 1)/mean_cand_local_confs
-                # the final confidence is the product of the two kinds of confidences
-                mean_cand_confs = mean_cand_recon_confs*mean_cand_local_confs
-                
-                most_conf_id = mean_cand_confs.argmax().item()
-                most_conf_id += start_ids_offset
-                id_to_buffer = milestone + most_conf_id
-                buffering_set_ids.append(id_to_buffer)
-                # print(f"add ref view {id_to_buffer}")                
-                # since we have inserted a new frame, overflow must happen when full_flag is True
-                if full_flag:
-                    if strategy == 'reservoir':
-                        buffering_set_ids.pop(np.random.randint(max_buffer_size))
-                    elif strategy == 'fifo':
-                        buffering_set_ids.pop(0)
-                # print(next_register_id, buffering_set_ids)
-                milestone += kf_stride
-        # transfer the data to cpu if it is not in the buffering set, to save gpu memory
-        # for i in range(next_register_id):
-        #     to_device(input_views[i], device=args.device if i in buffering_set_ids else 'cpu')
-        conf = registered_confs_mean[i]
-        if conf < 10:
-            fail_view[i] = conf.item()
-        print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
-        print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
+            # transfer the data to cpu if it is not in the buffering set, to save gpu memory
+            # for i in range(next_register_id):
+            #     to_device(input_views[i], device=args.device if i in buffering_set_ids else 'cpu')
+            conf = registered_confs_mean[i]
+            if conf < 10:
+                fail_view[i] = conf.item()
+            print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
+            print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
 
-        if args.save_online:
-            if (i + 1) % args.save_frequency == 0:
-                # 直接调用重构后的 save_snapshot，并传入数据列表
-                reconstructor.save_snapshot(
-                    snapshot_id=i + 1,
-                    save_dir=save_dir,
-                    all_pcds=per_frame_res['l2w_pcds'],
-                    all_rgbs=rgb_imgs,
-                    all_confs=per_frame_res['l2w_confs'],
-                    num_points_save=num_points_save,
-                    conf_thres_res=conf_thres_l2w
-                )
-        frame = video_api.get_video_frame()
+            if args.save_online:
+                if (i + 1) % args.save_frequency == 0:
+                    # 直接调用重构后的 save_snapshot，并传入数据列表
+                    reconstructor.save_snapshot(
+                        snapshot_id=i + 1,
+                        save_dir=save_dir,
+                        all_pcds=per_frame_res['l2w_pcds'],
+                        all_rgbs=rgb_imgs,
+                        all_confs=per_frame_res['l2w_confs'],
+                        num_points_save=num_points_save,
+                        conf_thres_res=conf_thres_l2w
+                    )
+            frame = video_api.get_video_frame()
+        else:
+            frame_num += 1
+            frame = video_api.get_video_frame()
 
             
     save_recon(input_views, num_views, save_dir, scene_id, 
@@ -781,18 +791,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         print(f">> saving per-frame predictions to {preds_dir}")
         np.save(join(preds_dir, 'registered_pcds.npy'), torch.cat(per_frame_res['l2w_pcds']).cpu().numpy())
         np.save(join(preds_dir, 'registered_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['l2w_confs']]).numpy())
-
-
-
-            
-            
-
-        
-        
-
-
-
-
 if __name__ == "__main__":
 
     args = parser.parse_args()

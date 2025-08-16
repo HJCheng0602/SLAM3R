@@ -5,7 +5,7 @@
 # set the img_dir below to the directory of the set of images you want to reconstruct
 # set the postfix below to the format of the rgb images in the img_dir
 ######################################################################################
-TEST_DATASET="Seq_Data(img_dir='data/wild/Library', postfix='.png', \
+TEST_DATASET="Seq_Data(img_dir='data/wild/Library', postfix='.jpg', \
 img_size=224, silent=False, sample_freq=1, \
 start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
 
@@ -13,7 +13,7 @@ start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="wild_demo"
+TEST_NAME="self_demo_n"
 KEYFRAME_STRIDE=3     #-1 for auto-adaptive keyframe stride selection
 WIN_R=5
 MAX_NUM_REGISTER=10

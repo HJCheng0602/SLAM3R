@@ -1,19 +1,17 @@
 #!/bin/bash
 
+
 ######################################################################################
-# set the img_dir below to the directory of the set of images you want to reconstruct
-# set the postfix below to the format of the rgb images in the img_dir
+# set the video path below to the directory of the video you want to reconstruct
 ######################################################################################
-TEST_DATASET="Seq_Data(img_dir='data/wild/Library', postfix='.png', \
-img_size=224, silent=False, sample_freq=1, \
-start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
+VIDEO_PATH="data/test/myvideo.mp4"
 
 ######################################################################################
 # set the parameters for whole scene reconstruction below
-# for defination of these parameters, please refer to the recon_from_onlinevideo.py
+# for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="realtime"
-KEYFRAME_STRIDE=3     #-1 for auto-adaptive keyframe stride selection
+TEST_NAME="video_reconstruct"
+KEYFRAME_STRIDE=3    
 WIN_R=5
 MAX_NUM_REGISTER=10
 NUM_SCENE_FRAME=10
@@ -22,6 +20,7 @@ CONF_THRES_L2W=12
 CONF_THRES_I2P=1.5
 NUM_POINTS_SAVE=1000000
 
+
 UPDATE_BUFFER_INTV=1
 BUFFER_SIZE=100       # -1 if size is not limited
 BUFFER_STRATEGY="reservoir"  # or "fifo"
@@ -29,12 +28,27 @@ BUFFER_STRATEGY="reservoir"  # or "fifo"
 KEYFRAME_ADAPT_MIN=1
 KEYFRAME_ADAPT_MAX=20
 KEYFRAME_ADAPT_STRIDE=1
+ENABLE_VIEWER=False   # whether to view the dynamic construction
+VIEWER_ARG="" 
+if [ "$ENABLE_VIEWER" = "True" ]; then
+  
+  VIEWER_ARG="--enable_viewer"
+fi
+
+SAVE_EACH_FRAME=True
+VIEWER_ARG1="" 
+if [ "$SAVE_EACH_FRAME" = "True" ]; then
+  
+  VIEWER_ARG1="--save_each_frame"
+fi
+PERFRAME=3           #every perframe to be registered
+SAVE_FREQUENCY=3     #every save_frequency useful frame to be save to file
 
 GPU_ID=-1
 
-python recon_from_onlinevideo.py \
+python recon_from_simplevideo.py \
 --test_name $TEST_NAME \
---dataset "$TEST_DATASET" \
+--dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \
 --keyframe_stride $KEYFRAME_STRIDE \
 --win_r $WIN_R \
@@ -45,9 +59,14 @@ python recon_from_onlinevideo.py \
 --num_points_save $NUM_POINTS_SAVE \
 --update_buffer_intv $UPDATE_BUFFER_INTV \
 --buffer_size $BUFFER_SIZE \
---buffer_strategy "$BUFFER_STRATEGY" \
+--buffer_strategy "${BUFFER_STRATEGY}" \
 --max_num_register $MAX_NUM_REGISTER \
 --keyframe_adapt_min $KEYFRAME_ADAPT_MIN \
 --keyframe_adapt_max $KEYFRAME_ADAPT_MAX \
 --keyframe_adapt_stride $KEYFRAME_ADAPT_STRIDE \
+--video_path $VIDEO_PATH \
+$VIEWER_ARG1 \
+--perframe $PERFRAME \
+--save_frequency $SAVE_FREQUENCY \
+$VIEWER_ARG \
 --save_preds

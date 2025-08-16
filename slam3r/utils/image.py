@@ -156,64 +156,70 @@ def load_images(folder_or_list, size, square_ok=False,
         print(f' ({len(imgs)} images loaded)')
     return imgs
 
-def process_single_frame(frame_array, size=224, idx=0):
+def process_single_frame(frame_bgr: np.ndarray, 
+                         size: int = 224, 
+                         square_ok: bool = False,
+                         device: str = 'cpu') -> dict:
     """
-    Processes a single video frame in NumPy array format and converts it
-    into a dictionary with a specific format.
+    处理单帧NumPy数组，其处理逻辑与原始的 load_images 函数严格一致。
 
-    Args:
-        frame_array (np.ndarray): The video frame from cv2.VideoCapture.read().
-        size (int): The target size for the resized and cropped image.
-        idx (int): The frame index, used for metadata.
-
-    Returns:
-        dict: A dictionary containing the processed image data and metadata.
+    :param frame_bgr: 输入的NumPy图像数组 (H, W, 3)，必须是OpenCV默认的BGR顺序。
+    :param size: 目标尺寸，通常为224。
+    :param square_ok: 是否允许方形输出（当size不为224时）。
+    :param device: 输出Tensor存放的设备 ('cpu' 或 'cuda')。
+    :return: 一个包含处理后图像信息的标准字典。
     """
+    img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    img = PIL.Image.fromarray(img_rgb)
     
-    # 1. Convert the NumPy array to a PIL.Image object
-    # The BGR to RGB conversion is necessary because OpenCV's default
-    # color space (BGR) differs from PIL's (RGB).
-    if frame_array.ndim == 3 and frame_array.shape[2] == 3:
-        img_pil = PIL.Image.fromarray(cv2.cvtColor(frame_array, cv2.COLOR_BGR2RGB))
-    else:
-        img_pil = PIL.Image.fromarray(frame_array)
+    img = PIL.ImageOps.exif_transpose(img)
 
-    W1, H1 = img_pil.size
+    W1, H1 = img.size
     
-    # 2. Core processing logic: resize and crop to match the model's input requirements
+
     if size == 224:
-        # Resize the shorter side to 224 and then crop to a 224x224 square
-        scale = size / min(H1, W1)
-        new_width, new_height = int(W1 * scale), int(H1 * scale)
-        img_pil = img_pil.resize((new_width, new_height), resample=PIL.Image.BICUBIC)
-        
-        # Crop the center region
-        left = (new_width - size) // 2
-        top = (new_height - size) // 2
-        right = (new_width + size) // 2
-        bottom = (new_height + size) // 2
-        img_pil = img_pil.crop((left, top, right, bottom))
+        if W1 < H1: 
+            new_w = size
+            new_h = round(size * H1 / W1)
+        else: 
+            new_h = size
+            new_w = round(size * W1 / H1)
+        resized_img = img.resize((new_w, new_h), PIL.Image.Resampling.LANCZOS)
     else:
-        # Resize the longer side to the specified size
-        scale = size / max(H1, W1)
-        new_width, new_height = int(W1 * scale), int(H1 * scale)
-        img_pil = img_pil.resize((new_width, new_height), resample=PIL.Image.BICUBIC)
+        if W1 < H1: 
+            new_h = size
+            new_w = round(size * W1 / H1)
+        else: 
+            new_w = size
+            new_h = round(size * H1 / W1)
+        resized_img = img.resize((new_w, new_h), PIL.Image.Resampling.LANCZOS)
 
-    # 3. Normalize and convert to a tensor
-    # transforms.ToTensor() converts the PIL Image to a [0, 1] float tensor
-    to_tensor_norm = tvf.transforms.ToTensor()
-    img_tensor = to_tensor_norm(img_pil)[None]  # Add a batch dimension
+    W, H = resized_img.size
+    cx, cy = W // 2, H // 2
+    if size == 224:
 
-    # 4. Encapsulate data into a dictionary
-    processed_img_dict = dict(
-        img=img_tensor,
-        true_shape=np.int32([img_pil.size[::-1]]),
-        idx=idx,
-        instance=str(idx),
-        label=f"online_stream_frame_{idx}"
+        half = size // 2
+        cropped_img = resized_img.crop((cx - half, cy - half, cx + half, cy + half))
+    else:
+
+        halfw = (cx // 16) * 8
+        halfh = (cy // 16) * 8
+        if not square_ok and W == H:
+            halfh = 3 * halfw // 4
+        cropped_img = resized_img.crop((cx - halfw, cy - halfh, cx + halfw, cy + halfh))
+    
+    W2, H2 = cropped_img.size
+
+    img_tensor = ImgNorm(cropped_img)[None].to(device) 
+    
+    processed_dict = dict(
+        img=img_tensor, 
+        true_shape=torch.tensor([H2, W2], dtype=torch.int32).to(device),
+        idx=0, 
+        instance='0', 
+        label='single_frame'
     )
-
-    return processed_img_dict
+    return processed_dict
 
 
 
