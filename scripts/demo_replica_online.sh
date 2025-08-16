@@ -12,7 +12,7 @@ start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="Replica_demo"
+TEST_NAME="Replica_online_imgs_demo"
 KEYFRAME_STRIDE=20
 UPDATE_BUFFER_INTV=3
 MAX_NUM_REGISTER=10
@@ -26,7 +26,7 @@ NUM_POINTS_SAVE=1000000
 GPU_ID=-1
 
 
-python recon_online.py \
+python recon_online_imgs.py \
 --test_name $TEST_NAME \
 --dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \

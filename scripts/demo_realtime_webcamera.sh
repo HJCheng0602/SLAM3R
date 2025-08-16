@@ -10,7 +10,7 @@ STREAMURL="http://rab:12345678@192.168.137.83:8081"
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon_from_onlinevideo.py
 ######################################################################################
-TEST_NAME="online_realtime"
+TEST_NAME="online_webvideo"
 KEYFRAME_STRIDE=3     
 WIN_R=5
 MAX_NUM_REGISTER=10
@@ -45,7 +45,7 @@ SAVE_FREQUENCY=3     #every save_frequency useful frame to be save to file
 
 GPU_ID=-1
 
-python recon_from_onlinevideo.py \
+python recon_online_webvideo.py \
 --test_name $TEST_NAME \
 --dataset "$TEST_DATASET" \
 --gpu_id $GPU_ID \

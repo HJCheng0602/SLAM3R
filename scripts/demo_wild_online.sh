@@ -13,7 +13,7 @@ start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="self_demo"
+TEST_NAME="wild_online_imgs_demo"
 KEYFRAME_STRIDE=3     #-1 for auto-adaptive keyframe stride selection
 WIN_R=5
 MAX_NUM_REGISTER=10
@@ -33,7 +33,7 @@ KEYFRAME_ADAPT_STRIDE=1
 
 GPU_ID=-1
 
-python recon_online.py \
+python recon_online_imgs.py \
 --test_name $TEST_NAME \
 --dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \

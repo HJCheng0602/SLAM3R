@@ -10,7 +10,7 @@ VIDEO_PATH="data/test/myvideo.mp4"
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="video_reconstruct"
+TEST_NAME="local_video"
 KEYFRAME_STRIDE=3    
 WIN_R=5
 MAX_NUM_REGISTER=10
@@ -46,7 +46,7 @@ SAVE_FREQUENCY=3     #every save_frequency useful frame to be save to file
 
 GPU_ID=-1
 
-python recon_from_simplevideo.py \
+python recon_online_localvideo.py \
 --test_name $TEST_NAME \
 --dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \

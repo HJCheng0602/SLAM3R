@@ -13,7 +13,7 @@ start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="self_demo_n"
+TEST_NAME="wild"
 KEYFRAME_STRIDE=3     #-1 for auto-adaptive keyframe stride selection
 WIN_R=5
 MAX_NUM_REGISTER=10
