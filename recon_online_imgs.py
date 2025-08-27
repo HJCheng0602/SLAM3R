@@ -289,7 +289,7 @@ def scene_frame_retrieve(candi_views:list, src_views:list, i2p_model,
     selected_views = [candi_views[id] for id in sel_ids]
     return selected_views, sel_ids
 
-def sel_ids_by_score(corr_scores: torch.tensor, align_confs, sel_num, 
+def sel_ids_by_score(corr_scores: torch.tensor, align_confs, sel_num,  
                      exclude_ids=None, use_mask=True, culmu_count=None):
     """select the ids of views according to the confidence
     corr_scores (cand_num,src_num,patch_num): the correlation scores between 

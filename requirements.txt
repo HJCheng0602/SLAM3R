@@ -12,3 +12,4 @@ huggingface-hub[torch]>=0.22
 pycuda
 vedo
 watchdog
+open3d
