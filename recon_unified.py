@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 import open3d as o3d
 plt.ion()
 
+from line_profiler import profile
+
 from slam3r.datasets.wild_seq import Seq_Data
 from slam3r.models import Image2PointsModel, Local2WorldModel, inf
 from slam3r.utils.device import to_numpy
@@ -34,6 +36,7 @@ input_group.add_argument("--img_dir", type=str, help="directory of the input ima
 parser.add_argument("--save_dir", type=str, default="results", help="directory to save the results") 
 parser.add_argument("--test_name", type=str, required=True, help="name of the test")
 parser.add_argument('--save_all_views', action='store_true', help='whether to save all views respectively')
+
 
 # args for the whole scene reconstruction
 parser.add_argument("--keyframe_stride", type=int, default=3, 
@@ -67,7 +70,7 @@ parser.add_argument('--buffer_size', type=int, default=100,
                     help='maximal size of the buffering set, -1 if infinite')
 parser.add_argument("--buffer_strategy", type=str, choices=['reservoir', 'fifo'], default='reservoir', 
                     help='strategy for maintaining the buffering set: reservoir-sampling or first-in-first-out')
-parser.add_argument("--save_online", action='store_true', default= True, 
+parser.add_argument("--save_online", action='store_true', 
                     help="whether to save the construct result online.")
 
 #params for auto adaptation of keyframe frequency
@@ -77,7 +80,7 @@ parser.add_argument("--keyframe_adapt_max", type=int, default=20,
                     help="maximal stride of sampling keyframes when auto adaptation")
 parser.add_argument("--keyframe_adapt_stride", type=int, default=1, 
                     help="stride for trying different keyframe stride")
-parser.add_argument("--perframe",type=int,default=3)
+parser.add_argument("--perframe",type=int,default=1)
 parser.add_argument("--enable_viewer",type=bool,default=False, help="whether to visualize the reconstruct progress.")
 
 parser.add_argument("--seed", type=int, default=42, help="seed for python random")
@@ -85,118 +88,195 @@ parser.add_argument('--gpu_id', type=int, default=-1, help='gpu id, -1 for auto 
 parser.add_argument('--save_preds', action='store_true', help='whether to save all per-frame preds')    
 parser.add_argument('--save_for_eval', action='store_true', help='whether to save partial per-frame preds for evaluation')   
 
+class picture_reader:
+    def __init__(self, dataset):
+        # detect the type of the input data
+        self.dataset = dataset
+        self.type = ""
+        self.readnum = 0
+        
+        if dataset.find(":") != -1:
+            self.type = "https"
+        else:
+            if dataset[-3:] == "mp4":
+                self.type = "video"
+            else:
+                self.type = "imgs"
+        if self.type == "imgs":
+            print('loading dataset: ', self.dataset)
+            self.data = Seq_Data(img_dir=self.dataset, postfix='.png', \
+                                    img_size=224, silent=False, sample_freq=1, \
+                                    start_idx=0, num_views=-1, start_freq=1, to_tensor=True)
+            if hasattr(self.data, "set_epoch"):
+                self.data.set_epoch(0)
+        elif self.type == "video":
+            self.video_capture = cv2.VideoCapture(self.dataset)
+            if not self.video_capture.isOpened():
+                print(f"error!can not open the video file{self.dataset}")
+                exit()
+            print("successful opened! start processing frame by frame...")
+        elif self.type == "https":
+            self.get_api = Get_online_video(self.dataset)
+    def read(self):
+        if self.type == "https":
+            return self.get_api.cap.read()
+        elif self.type == "video":
+            return self.video_capture.read()
+        elif self.type == "imgs":
+            print(f"reading the {self.readnum}th image")
+            self.readnum += 1
+
+            if self.readnum >= len(self.data[0]):
+                return False, None
+            return True, self.data[0][self.readnum]
+        
+        
+            
+            
+    
+        
+
 class IncrementalReconstructor:
-    def __init__(self, enable_viewer=False):
-        self.res_pcds = None
-        self.res_rgbs = None
-        self.res_confs = None
-        self.res_valid_masks = None
+    def __init__(self,initial_capacity=10000, point_dim=3, growth_factor=1.5):
+        self.res_rgbs = []
+        self.res_confs = []
+        self.valid_masks = []
         self.is_initialized = False
+        self.pcds = []
+        self.rgbs = []
+        self.conf_masks = []
+        self.frame_num = 0
+        self.point_dim = point_dim
+        
+        self.growth_factor = growth_factor
+        
+        self._buffer1 = np.zeros((initial_capacity, self.point_dim), dtype=np.float32)
+        self._capacity1 = initial_capacity
+        self._size1 = 0
+        
+        # res_pcds 是外部访问的属性，它始终是正确大小的视图
+        self.res_pcds = self._buffer1[:0]
+        
+        self._buffer2 = np.zeros((initial_capacity, 3), dtype=np.uint8)
+        self._capacity2 = initial_capacity
+        self._size2 = 0
+        
+        self.res_rgbs = self._buffer2[:0]
         
 
         self.vis = None
         self.pcd = None
-        self.is_viewer_enabled = enable_viewer
-        self.is_running = True 
-    def run_viewer(self):
-        if not self.is_viewer_enabled:
-            return
+    def _grow_capacity1(self, min_required_size: int):
+        """
+        内部方法，用于扩展缓冲区容量。
+        """
+        # 计算新容量，至少是所需大小，但通常会按增长因子变得更大
+        new_capacity = int(max(min_required_size, self._capacity1 * self.growth_factor))
+        print(f"New capacity set to: {new_capacity}")
 
-        while self.is_running:
-            if not self.vis.poll_events():
-                self.is_running = False
-                break
-            self.vis.update_renderer()
-            time.sleep(0.01)
-
-    def save_snapshot(self, snapshot_id: int, save_dir: str, 
-                    all_pcds: list, all_rgbs: list, all_confs: list, # Correctly receives lists
-                    num_points_save: int = 200000, conf_thres_res: float = 3.0):
-
-        if not all_pcds:
-            print("Warning: No point clouds to save.")
-            return
-
-        # 1. One-time, efficient concatenation into LOCAL variables
-        print(f"Snapshot {snapshot_id}: Concatenating data from {len(all_pcds)} frames...")
+        # 创建一个新的、更大的缓冲区
+        new_buffer = np.zeros((new_capacity, 3), dtype=np.float32)
         
-        res_pcds_np = [to_numpy(pcd).reshape(-1, 3) for pcd in all_pcds if pcd is not None]
-        res_rgbs_np = [rgb.reshape(-1, 3) for rgb in all_rgbs if rgb is not None]
-        res_confs_np = [to_numpy(conf).reshape(-1) for conf in all_confs if conf is not None]
-
-        # These lists could be empty if no frames have been processed yet
-        if not res_pcds_np:
-            print(f"Warning for snapshot {snapshot_id}: No valid point cloud data to process.")
-            return
-
-        # Create the local variables
-        res_pcds = np.concatenate(res_pcds_np, axis=0)
-        res_rgbs = np.concatenate(res_rgbs_np, axis=0)
-        res_confs = np.concatenate(res_confs_np, axis=0)
-
-        # 2. Subsequent logic now uses the LOCAL variables
-        pts_count = len(res_pcds)
-        final_valid_mask = np.ones(pts_count, dtype=bool)
+        # 将旧缓冲区的数据整体拷贝到新缓冲区
+        # 这是主要的开销所在，但我们不常执行它
+        new_buffer[:self._size1] = self._buffer1[:self._size1]
         
-        # FIX 1: Use local `res_confs` instead of `self.res_confs`
-        # Also, check its size, as it's a numpy array, not None.
-        if res_confs.size > 0:
-            conf_masks = res_confs > conf_thres_res # Use local `res_confs`
-            final_valid_mask &= conf_masks
+        # 替换旧缓冲区并更新容量
+        self._buffer1 = new_buffer
+        self._capacity1 = new_capacity
+    def _grow_capacity2(self, min_required_size: int):
+        """
+        内部方法，用于扩展缓冲区容量。
+        """
+        # 计算新容量，至少是所需大小，但通常会按增长因子变得更大
+        new_capacity = int(max(min_required_size, self._capacity2 * self.growth_factor))
+        print(f"New capacity set to: {new_capacity}")
 
-        valid_ids = np.where(final_valid_mask)[0]
+        # 创建一个新的、更大的缓冲区
+        new_buffer = np.zeros((new_capacity, 3), dtype=np.uint8)
         
-        if len(valid_ids) == 0:
-            print(f"Warning for snapshot {snapshot_id}: No valid points left after filtering.")
-            return
+        # 将旧缓冲区的数据整体拷贝到新缓冲区
+        # 这是主要的开销所在，但我们不常执行它
+        new_buffer[:self._size2] = self._buffer2[:self._size2]
+        
+        # 替换旧缓冲区并更新容量
+        self._buffer2 = new_buffer
+        self._capacity2 = new_capacity
+
+    def add_view(self, view, img, conf_thres=3, valid_mask=None, registed_conf=None):
+        """add a new view to the reconstruction
+        Args:
+            view: a dict containing the following keys:
+                'pts3d_world': (1,H,W,3) the pointmap in world coordinates
+                'img': (1,3,H,W) the input image
+                'conf': (1,H,W) the confidence map of the pointmap
+            conf_thres: threshold for filtering out low-confidence points
+        """
+        
+        
+        
+        registered_pcd = to_numpy(view['pts3d_world'][0])
+        num_new_points = registered_pcd.shape[0] * registered_pcd.shape[1]
+
+        if self._size1 + num_new_points > self._capacity1:
+            print(f"Capacity insufficient for 1. Growing from {self._capacity1} to accommodate {num_new_points} new points.")
+            self._grow_capacity1(self._size1 + num_new_points)
+        if self._size2 + num_new_points > self._capacity2:
+            print(f"Capacity insufficient for 2. Growing from {self._capacity2} to accommodate {num_new_points} new points.")
+            self._grow_capacity2(self._size2 + num_new_points)
             
-        print(f'Snapshot {snapshot_id}: Ratio of points filtered out: {(1. - len(valid_ids) / pts_count) * 100:.2f}%')
+        if registered_pcd.shape[0] == 3:
+            registered_pcd = registered_pcd.transpose(1,2,0)
+        registered_pcd = registered_pcd.reshape(-1,3)
+        rgb = img.reshape(-1,3)
 
+        
+        self._buffer1[self._size1:self._size1 + num_new_points] = registered_pcd
+        self._size1 += num_new_points
+        self.res_pcds = self._buffer1[:self._size1]
+        
+        self._buffer2[self._size2:self._size2 + num_new_points] = rgb
+        self._size2 += num_new_points
+        self.res_rgbs = self._buffer2[:self._size2]
+        
+        if valid_mask is not None:
+            self.valid_masks.append(valid_mask)
+        if registed_conf is not None:
+            self.res_confs.append(registed_conf)
+        if registed_conf is not None:
+            conf_mask = (registed_conf > conf_thres).reshape(-1).cpu() 
+            self.conf_masks.append(conf_mask)
+            
+    def save_online_view(self, save_dir, scene_id, num_points_save=200000, conf_thres_res=3):
+        
+        pts_count = self._size1
+        valid_ids = np.arange(pts_count)
+        
+
+        
+        if self.valid_masks:
+            valid_masks = np.stack(self.valid_masks, axis=0).reshape(-1)
+            # print('filter out ratio of points by gt valid masks:', 1.-valid_masks.astype(float).mean())
+        else:
+            valid_masks = np.ones(pts_count, dtype=bool)
+        
+        # filter out points with low confidence
+        
+        if self.res_confs is not None and len(self.res_confs) > 0:
+            conf_masks = np.array(torch.cat(self.conf_masks))
+            valid_ids = valid_ids[conf_masks&valid_masks]
+            print('ratio of points filered out: {:.2f}%'.format((1.-len(valid_ids)/pts_count)*100) + f"saving the {self.frame_num}th frame")
+            self.frame_num += 1
+        
+        # sample from the resulting pcd consisting of all frames
         n_samples = min(num_points_save, len(valid_ids))
-        print(f"Snapshot {snapshot_id}: Resampling {n_samples} points from {len(valid_ids)} valid points.")
+        print(f"resampling {n_samples} points from {len(valid_ids)} points")
         sampled_idx = np.random.choice(valid_ids, n_samples, replace=False)
+        sampled_pts = np.array(self.res_pcds)[sampled_idx]
+        sampled_rgbs = np.array(self.res_rgbs)[sampled_idx]
+        save_name = f"{scene_id}_{self.frame_num}th_recon_online.ply"
 
-        # FIX 2: Use local `res_pcds` and `res_rgbs` to sample points. THIS IS THE LINE THAT CRASHED.
-        sampled_pts = res_pcds[sampled_idx]
-        sampled_rgbs = res_rgbs[sampled_idx]
-        
-
-        if self.is_viewer_enabled:
-
-            if self.vis is None:
-                self.vis = o3d.visualization.Visualizer()
-                self.vis.create_window(window_name="Realtime Snapshot Viewer")
-                self.pcd = o3d.geometry.PointCloud()
-                self.vis.add_geometry(self.pcd)
-
-
-            self.pcd.points = o3d.utility.Vector3dVector(sampled_pts)
-            self.pcd.colors = o3d.utility.Vector3dVector(sampled_rgbs / 255.0)
-
-
-            self.vis.update_geometry(self.pcd)
-            self.vis.reset_view_point(True)
-            self.vis.poll_events()
-            self.vis.update_renderer()
-
-        save_name = f"recon_snapshot_{snapshot_id:05d}.ply"
-        eachframe_dir = join(save_dir, "eachframe")
-        os.makedirs(eachframe_dir, exist_ok=True)
-        save_path = join(eachframe_dir, save_name)
-        save_ply(points=sampled_pts, save_path=save_path, colors=sampled_rgbs)
-
-        realtime_save_path = join(save_dir, "realtime_save.ply")
-        temp_realtime_save_path = join(save_dir, "realtime_save.temp.ply")
-        
-        save_ply(points=sampled_pts, save_path=temp_realtime_save_path, colors=sampled_rgbs)
-
-        if os.path.exists(temp_realtime_save_path):
-            try:
-                os.replace(temp_realtime_save_path, realtime_save_path)
-            except PermissionError:
-                print("Warning: Could not replace the PLY file. It is likely being used by another process.")
-            except Exception as e:
-                print(f"Error during file replacement: {e}")
+        save_ply(points=sampled_pts[:,:3], save_path=join(save_dir, save_name), colors=sampled_rgbs)
 
 def save_recon(views, pred_frame_num, save_dir, scene_id, save_all_views=False, 
                       imgs=None, registered_confs=None, 
@@ -424,10 +504,10 @@ def initialize_scene(views:list, model:Image2PointsModel, winsize=5, conf_thres=
         return initial_pcds, initial_confs, init_ref_id
     return initial_pcds, initial_confs
     
-
+@profile
 def scene_recon_pipeline(i2p_model:Image2PointsModel,
                          l2w_model:Local2WorldModel,
-                        video_capture,args,
+                        picture_capture,args,
                          save_dir="results"):
     win_r = args.win_r
     num_scene_frame = args.num_scene_frame
@@ -438,7 +518,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     kf_stride = args.keyframe_stride
 
 
-    reconstructor = IncrementalReconstructor(args.enable_viewer)
+    reconstructor = IncrementalReconstructor()
 
     scene_id = "video_output"
     data_views = []
@@ -457,21 +537,27 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
     registered_confs_mean = []
     i = -1
-    success, frame = video_capture.read()
+    success, frame = picture_capture.read()
+    
+
+    
     frame_num = 0
 
     if not success:
-        # 如果 success 为 False，说明视频已经处理完毕，跳出循环
         return
 
     while frame is not None:
         if frame_num % args.perframe == 0:
+
             frame_num += 1
             num_views += 1
             i += 1
             # Pre-save the RGB images along with their corresponding masks
             # in preparation for visualization at last.
-            frame = process_single_frame(frame,224,"cuda")
+            if picture_capture.type != "imgs":
+                frame = process_single_frame(frame,224,"cuda")
+            else:
+                frame['true_shape'] = frame['true_shape'][0]
             data_views.append(frame)
 
 
@@ -505,16 +591,13 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
 
             # accumulate the initial window frames
             if i < (initial_winsize - 1)*kf_stride and i % kf_stride == 0:
-                success, frame = video_capture.read()
+                success, frame = picture_capture.read()
                 if not success:
                     # 如果 success 为 False，说明视频已经处理完毕，跳出循环
                     return
                 continue
             elif i == (initial_winsize - 1)*kf_stride:
-                initial_pcds, initial_confs, init_ref_id = initialize_scene(input_views[:initial_winsize*kf_stride:kf_stride],
-                                                                            i2p_model,
-                                                                            winsize=initial_winsize,
-                                                                            return_ref_id=True)
+                initial_pcds, initial_confs, init_ref_id = initialize_scene(input_views[:initial_winsize*kf_stride:kf_stride],i2p_model,winsize=initial_winsize,return_ref_id=True)
                 # set up the world coordinates with the initial window
                 init_num = len(initial_pcds)
                 for j in range(init_num):
@@ -536,7 +619,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
                     per_frame_res['l2w_pcds'][j*kf_stride] = normed_pts[j]
 
             elif i < (initial_winsize - 1) * kf_stride:
-                success, frame = video_capture.read()
+                success, frame = picture_capture.read()
                 if not success:
                     # 如果 success 为 False，说明视频已经处理完毕，跳出循环
                     return
@@ -628,7 +711,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
                 max_buffer_size = args.buffer_size
                 strategy = args.buffer_strategy
                 candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
-                success, frame = video_capture.read()
+                success, frame = picture_capture.read()
                 if not success:
                     # 如果 success 为 False，说明视频已经处理完毕，跳出循环
                     break
@@ -765,25 +848,20 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
             print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
 
             if args.save_online:
-                if (i + 1) % args.save_frequency == 0:
-                    # 直接调用重构后的 save_snapshot，并传入数据列表
-                    reconstructor.save_snapshot(
-                        snapshot_id=i + 1,
-                        save_dir=save_dir,
-                        all_pcds=per_frame_res['l2w_pcds'],
-                        all_rgbs=rgb_imgs,
-                        all_confs=per_frame_res['l2w_confs'],
-                        num_points_save=num_points_save,
-                        conf_thres_res=conf_thres_l2w
-                    )
-            success, frame = video_capture.read()
+                # TODO:
+                # save the reconstruction results in real time
+                reconstructor.add_view(input_views[i], rgb_imgs[i], conf_thres=conf_thres_l2w, 
+                                       registed_conf=per_frame_res['l2w_confs'][i])
+                reconstructor.save_online_view(save_dir, scene_id, num_points_save=num_points_save)
+            frame_num += 1
+            success, frame = picture_capture.read()
 
             if not success:
                 # 如果 success 为 False，说明视频已经处理完毕，跳出循环
                 break
         else:
             frame_num += 1
-            success, frame = video_capture.read()
+            success, frame = picture_capture.read()
 
             if not success:
                 # 如果 success 为 False，说明视频已经处理完毕，跳出循环
@@ -796,7 +874,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     if args.save_preds:
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)
-        print(f">> saving per-frame predictions to {preds_dir}")
+        print(f">> saving per-frame predictions to {preds_dir}") 
         np.save(join(preds_dir, 'local_pcds.npy'), torch.cat(per_frame_res['i2p_pcds']).cpu().numpy())
         np.save(join(preds_dir, 'registered_pcds.npy'), torch.cat(per_frame_res['l2w_pcds']).cpu().numpy())
         np.save(join(preds_dir, 'local_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['i2p_confs']]).numpy())
@@ -828,7 +906,6 @@ if __name__ == "__main__":
     # print(args)
     np.random.seed(args.seed)
 
-    #----------Load model and ckpt-----------
     if args.i2p_weights is not None:
         i2p_model = load_model(args.i2p_model, args.i2p_weights, args.device)
     else:
@@ -841,17 +918,14 @@ if __name__ == "__main__":
         l2w_model.to(args.device)
     i2p_model.eval()
     l2w_model.eval()
-
-    video_capture = cv2.VideoCapture(args.video_path)
-    if not video_capture.isOpened():
-        print(f"错误：无法打开视频文件 {args.video_path}")
-        exit()
-    print("视频文件打开成功，开始逐帧处理...")
+    
+    
+    picture_capture = picture_reader(args.dataset)
 
     save_dir = os.path.join(args.save_dir, args.test_name)
     os.makedirs(save_dir, exist_ok=True)
 
-    scene_recon_pipeline(i2p_model, l2w_model,video_capture, args, save_dir=save_dir)
+    scene_recon_pipeline(i2p_model, l2w_model,picture_capture, args, save_dir=save_dir)
             
     
     

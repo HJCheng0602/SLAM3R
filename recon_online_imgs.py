@@ -412,8 +412,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     assert initial_winsize >= 2, "not enough views for initializing the scene reconstruction"
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
     registered_confs_mean = []
-    import pdb
-    pdb.set_trace()
 
     for i in range(len(data_views)):
         
@@ -583,6 +581,10 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
 
         ni = next_register_id
         max_id = min(ni, num_views - 1)
+        
+        # import pdb
+        # pdb.set_trace()
+        
         # select sccene frames in the buffering set to work as a global reference
         cand_ref_ids = buffering_set_ids
         ref_views, sel_pool_ids = scene_frame_retrieve(
@@ -596,7 +598,11 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         for j in range(1, win_r + 1):
             if i - j * adj_distance >= 0:
                 sel_ids.append(i - j * adj_distance)
-        sel_ids += sel_pool_ids
+        real_sel_pool_ids = []
+        for item in sel_pool_ids:
+            real_sel_pool_ids.append(buffering_set_ids[item])
+        sel_ids += real_sel_pool_ids
+        
         local_views = [input_views[id] for id in sel_ids]
         ref_id = 0
 

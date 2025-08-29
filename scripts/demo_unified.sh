@@ -5,15 +5,17 @@
 # set the img_dir below to the directory of the set of images you want to reconstruct
 # set the postfix below to the format of the rgb images in the img_dir
 ######################################################################################
-TEST_DATASET="Seq_Data(img_dir='data/wild/Library', postfix='.png', \
-img_size=224, silent=False, sample_freq=1, \
-start_idx=0, num_views=-1, start_freq=1, to_tensor=True)"
+TEST_DATASET="data/wild/Library" 
+
+# if imgs, you just need to input the dictionary path;
+#if video, you need to input the video path like : data/test/myvideo.mp4
+# if webcamera you need to input the url like: http://rab:12345678@192.168.137.83:8081
 
 ######################################################################################
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="wild_online_imgs_demo"
+TEST_NAME="unified_slam3r_reconstruction"
 KEYFRAME_STRIDE=3     #-1 for auto-adaptive keyframe stride selection
 WIN_R=5
 MAX_NUM_REGISTER=10
@@ -33,7 +35,7 @@ KEYFRAME_ADAPT_STRIDE=1
 
 GPU_ID=-1
 
-python recon_online_imgs.py \
+python recon_unified.py \
 --test_name $TEST_NAME \
 --dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \

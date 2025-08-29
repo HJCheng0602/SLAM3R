@@ -77,6 +77,9 @@ parser.add_argument('--save_for_eval', action='store_true', help='whether to sav
 def save_recon(views, pred_frame_num, save_dir, scene_id, save_all_views=False, 
                       imgs=None, registered_confs=None, 
                       num_points_save=200000, conf_thres_res=3, valid_masks=None):  
+    
+    import pdb
+    pdb.set_trace()
     save_name = f"{scene_id}_recon.ply"
     
     # collect the registered point clouds and rgb colors
@@ -362,6 +365,10 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         to_device(view, device=args.device)
     # pre-extract img tokens by encoder, which can be reused 
     # in the following inference by both i2p and l2w models
+    
+    import pdb
+    pdb.set_trace()
+    
     res_shapes, res_feats, res_poses = get_img_tokens(data_views, i2p_model)    # 300+fps
     print('finish pre-extracting img tokens')
 
