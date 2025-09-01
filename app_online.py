@@ -10,7 +10,7 @@ import threading
 from queue import Queue,Empty
 import viser
 
-from recon import get_img_tokens, initialize_scene, adapt_keyframe_stride, i2p_inference_batch, l2w_inference, normalize_views, scene_frame_retrieve
+from recon_unified import get_img_tokens, initialize_scene, i2p_inference_batch, l2w_inference, normalize_views, scene_frame_retrieve
 from slam3r.datasets.wild_seq import Seq_Data
 from slam3r.models import Local2WorldModel, Image2PointsModel
 from slam3r.utils.device import to_numpy
@@ -460,14 +460,12 @@ def recon_scene(i2p_model:Image2PointsModel,
             point_cloud_queue.put((per_frame_res["l2w_pcds"][i][0], rgb_imgs[i], per_frame_res['l2w_confs'][i]))
 
             if not success:
-                # 如果 success 为 False，说明视频已经处理完毕，跳出循环
                 break
         else:
             frame_num += 1
             success, frame = dataset.read()
 
             if not success:
-                # 如果 success 为 False，说明视频已经处理完毕，跳出循环
                 break
     per_frame_res['rgb_imgs'] = rgb_imgs
     save_path = get_model_from_scene(per_frame_res=per_frame_res, 
@@ -481,7 +479,7 @@ def recon_scene(i2p_model:Image2PointsModel,
 def print_model_viser():
     server = viser.ViserServer()
 
-    # 初始化空的 NumPy 数组来保存所有点云数据
+
     points_buffer = np.zeros((0, 3), dtype=np.float32)
     colors_buffer = np.zeros((0, 3), dtype=np.uint8)
 
@@ -501,7 +499,7 @@ def print_model_viser():
             new_data = point_cloud_queue.get(block=True, timeout=0.1)
             
             if new_data is None:
-                print("消费者：收到结束信号，停止更新。")
+                print("consumer: received termination signal.")
                 break
 
             new_frame_points_data, new_frame_colors_data, new_frame_confs_data = new_data
@@ -538,26 +536,25 @@ def print_model_viser():
                 sampled_pts = filtered_points[sampled_idx]
                 sampled_colors = filtered_colors[sampled_idx]
 
-                # --- 核心修改：使用 np.concatenate 追加数据到总缓冲区 ---
                 points_buffer = np.concatenate((points_buffer, sampled_pts), axis=0)
                 colors_buffer = np.concatenate((colors_buffer, sampled_colors), axis=0)
 
-                # --- 使用直接赋值的方式进行全量更新 ---
+
                 point_cloud_handle.points = points_buffer
                 point_cloud_handle.colors = colors_buffer
-                
-                print(f"消费者：已处理并更新一帧，总点数: {len(points_buffer)}。")
+            
+                print(f"consumer: point cloud updated with {n_samples} new points, total {len(points_buffer)} points now.")
             else:
-                print("消费者：当前帧没有符合条件的点。")
+                print("consumer: no points passed the confidence threshold in this frame.")
 
         except Empty:
             pass
         
         except Exception as e:
-            print(f"消费者：处理数据时出错: {e}")
+            print(f"consumer: encountered an error: {e}")
             break
             
-    print("主程序已完成点云更新。")
+    print("consumer: exiting visualization thread.")
     
 def get_model_from_scene(per_frame_res, save_dir, 
                          num_points_save=200000, 
