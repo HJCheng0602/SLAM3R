@@ -581,9 +581,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
 
         ni = next_register_id
         max_id = min(ni, num_views - 1)
-        
-        # import pdb
-        # pdb.set_trace()
+
         
         # select sccene frames in the buffering set to work as a global reference
         cand_ref_ids = buffering_set_ids

@@ -13,3 +13,4 @@ pycuda
 vedo
 watchdog
 open3d
+viser

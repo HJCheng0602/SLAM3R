@@ -505,7 +505,7 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                 image_gallery = gradio.Gallery(label="Click or use the left/right arrow keys to browse images",
                                             visible=False,
                                             selected_index=0,
-                                            preview=True, 
+                                            preview=True,   
                                             height=300,
                                             scale=2)
                 video_gallery = gradio.Video(label="Uploaded Video",

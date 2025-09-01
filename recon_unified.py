@@ -866,6 +866,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
             if not success:
                 # 如果 success 为 False，说明视频已经处理完毕，跳出循环
                 break
+
             
     save_recon(input_views, num_views, save_dir, scene_id, 
                       args.save_all_views, rgb_imgs, registered_confs=per_frame_res['l2w_confs'], 
