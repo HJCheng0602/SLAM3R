@@ -14,3 +14,4 @@ vedo
 watchdog
 open3d
 viser
+line_profiler
