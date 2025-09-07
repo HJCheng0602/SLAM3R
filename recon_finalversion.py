@@ -411,6 +411,7 @@ def select_ids_as_reference(buffering_set_ids, i, next_register_id, num_views, i
                                      , adj_distance):
     """select the ids of scene frames from the buffering set
     """
+
     ni = next_register_id
     max_id = min(ni, num_views - 1)
     # select sccene frames in the buffering set to work as a global reference
@@ -430,7 +431,7 @@ def select_ids_as_reference(buffering_set_ids, i, next_register_id, num_views, i
     real_sel_pool_ids = []
     for item in sel_pool_ids:
         real_sel_pool_ids.append(buffering_set_ids[item])
-        sel_ids += real_sel_pool_ids
+    sel_ids += real_sel_pool_ids
     return sel_ids, ref_views, ni, max_id
 
 def initial_scene_for_accumulated_frames(input_views, initial_winsize, kf_stride, i2p_model, per_frame_res, registered_confs_mean, args, conf_thres_i2p):
@@ -458,7 +459,7 @@ def initial_scene_for_accumulated_frames(input_views, initial_winsize, kf_stride
         # filter out points with low confidence
         input_views[j*kf_stride]['pts3d_world'][~initial_valid_masks[j]] = 0
         per_frame_res['l2w_pcds'][j*kf_stride] = normed_pts[j]
-    return buffering_set_ids, init_ref_id, init_num, initial_valid_masks
+    return buffering_set_ids, init_ref_id, init_num
 
 def recover_points_in_initial_window(i, buffering_set_ids, kf_stride, init_ref_id, per_frame_res, win_r
                                      , adj_distance, input_views, i2p_model, conf_thres_i2p):
@@ -502,10 +503,10 @@ def recover_points_in_initial_window(i, buffering_set_ids, kf_stride, init_ref_i
 
         local_confs_mean_up2now = [conf.mean() for conf in per_frame_res['i2p_confs'] if conf is not None]
         print(f"finish revocer pcd of frame {view_id} in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean_up2now).mean():.2f} up to now.")
+    return local_confs_mean_up2now
 
 def recover_points_in_online_views(local_views, i2p_model, i, ref_id, 
                                    per_frame_res, input_views, conf_thres_i2p):
-    # recover poionts in the initial window, and save the keyframe points and confs
     output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id,
                                     tocpu=False, unsqueeze=False)['preds']
     # save results of the i2p model for the initial window
@@ -521,6 +522,7 @@ def recover_points_in_online_views(local_views, i2p_model, i, ref_id,
 
     local_confs_mean_up2now = [conf.mean() for conf in per_frame_res['i2p_confs']]
     print(f"finish revocer pcd of frame {i} in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean_up2now).mean():.2f} up to now.")
+    return local_confs_mean_up2now
 
 def register_online_view(ref_views, input_views, l2w_model,
                          args, max_id, ni, per_frame_res, registered_confs_mean, i, next_register_id):
@@ -545,7 +547,7 @@ def register_online_view(ref_views, input_views, l2w_model,
     next_register_id += 1
     return next_register_id
 def update_buffer_set(next_register_id, update_buffer_intv, max_buffer_size, kf_stride, buffering_set_ids, 
-                      strategy, registered_confs_mean, local_confs_mean_up2now):
+                      strategy, registered_confs_mean, local_confs_mean_up2now, candi_frame_id, milestone):
     if next_register_id - milestone >= update_buffer_intv:
         while(next_register_id - milestone >= kf_stride):
             candi_frame_id += 1
@@ -595,7 +597,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
     win_r = args.win_r
     num_scene_frame = args.num_scene_frame
     initial_winsize = args.initial_winsize
-    conf_thres_l2w = args.conf_htres_l2w
+    conf_thres_l2w = args.conf_thres_l2w
     conf_thres_i2p = args.conf_thres_i2p
     num_points_save = args.num_points_save
     kf_stride = args.keyframe_stride
@@ -621,6 +623,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
     success, frame = picture_capture.read()
     if not success:
         return
+
     
     while frame is not None:
         if frame_num % args.perframe == 0:
@@ -642,7 +645,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 buffering_set_ids, init_ref_id, init_num = initial_scene_for_accumulated_frames(input_views, initial_winsize, kf_stride,
                                                      i2p_model, per_frame_res, registered_confs_mean,
                                                      args, conf_thres_i2p)
-                recover_points_in_initial_window(i, buffering_set_ids, kf_stride,
+                local_confs_mean_up2now = recover_points_in_initial_window(i, buffering_set_ids, kf_stride,
                                                  init_ref_id, per_frame_res, win_r,
                                                  adj_distance, input_views, i2p_model,
                                                  conf_thres_i2p)
@@ -690,11 +693,10 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
             sel_ids, ref_views, ni, max_id = select_ids_as_reference(buffering_set_ids, i, next_register_id, 
                                                 num_views, input_views, i2p_model, num_scene_frame, win_r,
                                                 adj_distance)
-            
             local_views = [input_views[id] for id in sel_ids]
             ref_id = 0
             
-            recover_points_in_online_views(local_views, i2p_model, i, ref_id, per_frame_res,
+            local_confs_mean_up2now = recover_points_in_online_views(local_views, i2p_model, i, ref_id, per_frame_res,
                                            input_views, conf_thres_i2p)
             next_register_id = register_online_view(ref_views, input_views, l2w_model, args,
                                  max_id, ni, per_frame_res, registered_confs_mean, i, next_register_id)
@@ -750,4 +752,34 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
         np.save(join(preds_dir, 'registered_pcds.npy'), torch.cat(per_frame_res['l2w_pcds']).cpu().numpy())
         np.save(join(preds_dir, 'registered_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['l2w_confs']]).numpy())
 
-        
+if __name__ == "__main__":
+
+    args = parser.parse_args()
+    if args.gpu_id == -1:
+        args.gpu_id = get_free_gpu()
+    
+    print("using gpu: ", args.gpu_id)
+    torch.cuda.set_device(f"cuda:{args.gpu_id}")
+    # print(args)
+    np.random.seed(args.seed)
+
+    if args.i2p_weights is not None:
+        i2p_model = load_model(args.i2p_model, args.i2p_weights, args.device)
+    else:
+        i2p_model = Image2PointsModel.from_pretrained('siyan824/slam3r_i2p')
+        i2p_model.to(args.device)
+    if args.l2w_weights is not None:
+        l2w_model = load_model(args.l2w_model, args.l2w_weights, args.device)
+    else:
+        l2w_model = Local2WorldModel.from_pretrained('siyan824/slam3r_l2w')
+        l2w_model.to(args.device)
+    i2p_model.eval()
+    l2w_model.eval()
+    
+    
+    picture_capture = picture_reader(args.dataset)
+
+    save_dir = os.path.join(args.save_dir, args.test_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+    scene_recon_pipeline_online(i2p_model, l2w_model,picture_capture, args, save_dir=save_dir)

@@ -449,6 +449,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         local_views = [input_views[id] for id in sel_ids]
         ref_id = 0 
         # recover points in the local window, and save the keyframe points and confs
+
         output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id, 
                                     tocpu=False, unsqueeze=False)['preds']
         #save results of the i2p model
@@ -534,7 +535,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         l2w_input_views = ref_views + input_views[ni:max_id+1]
         input_view_num = len(ref_views) + max_id - ni + 1
         assert input_view_num == len(l2w_input_views)
-        
         output = l2w_inference(l2w_input_views, l2w_model, 
                                ref_ids=list(range(len(ref_views))), 
                                device=args.device,

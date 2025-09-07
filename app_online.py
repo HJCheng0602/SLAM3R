@@ -353,7 +353,7 @@ def recon_scene(i2p_model:Image2PointsModel,
             real_sel_pool_ids = []
             for item in sel_pool_ids:
                 real_sel_pool_ids.append(buffering_set_ids[item])
-                sel_ids += real_sel_pool_ids
+            sel_ids += real_sel_pool_ids
             
             
             local_views = [input_views[id] for id in sel_ids]
@@ -898,7 +898,7 @@ def main():
 
 if __name__ == "__main__":
     productor = threading.Thread(target=main)
-    displayer = threading.Thread(target=print_model_viser)
+    #displayer = threading.Thread(target=print_model_viser)
     
     productor.start()
-    displayer.start()
+    #displayer.start()
