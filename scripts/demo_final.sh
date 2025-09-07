@@ -35,7 +35,7 @@ KEYFRAME_ADAPT_STRIDE=1
 
 GPU_ID=-1
 
-python recon_finalversion.py \
+python recon_miao.py \
 --test_name $TEST_NAME \
 --dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \
@@ -53,4 +53,7 @@ python recon_finalversion.py \
 --keyframe_adapt_min $KEYFRAME_ADAPT_MIN \
 --keyframe_adapt_max $KEYFRAME_ADAPT_MAX \
 --keyframe_adapt_stride $KEYFRAME_ADAPT_STRIDE \
---save_preds
+--save_preds \
+--online
+
+# if you want to reconstruct it offline, please remove the "--online" attr.

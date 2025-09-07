@@ -607,8 +607,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
                 # initialize the buffering set with the initial window
                 assert args.buffer_size <= 0 or args.buffer_size >= init_num 
                 buffering_set_ids = [j*kf_stride for j in range(init_num)]
-                import pdb
-                pdb.set_trace()
                 # set ip the woeld coordinates with frames in the initial window
                 for j in range(init_num):
                     input_views[j*kf_stride]['pts3d_world'] = initial_pcds[j]
