@@ -368,6 +368,7 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
     # TODO: batchify
     local_confs_mean = []
     adj_distance = kf_stride
+
     for view_id in tqdm(range(num_views), desc="I2P resonstruction"):
         # skip the views in the initial window
         if view_id in buffering_set_ids:
@@ -419,6 +420,7 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
                                    ref_ids=list(range(1,len(l2w_input_views))), 
                                    device=args.device,
                                    normalize=args.norm_input)
+
             
             # process the output of L2W model
             input_views[view_id]['pts3d_world'] = output[0]['pts3d_in_other_view'] # 1,224,224,3
@@ -478,6 +480,7 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
                                ref_ids=list(range(len(ref_views))), 
                                device=args.device,
                                normalize=args.norm_input)
+
     
         # process the output of L2W model
         src_ids_local = [id+len(ref_views) for id in range(max_id-ni+1)]  # the ids of src views in the local window
@@ -543,6 +546,7 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
             to_device(input_views[i], device=args.device if i in buffering_set_ids else 'cpu')
     
     pbar.close()
+
     
     fail_view = {}
     for i,conf in enumerate(registered_confs_mean):

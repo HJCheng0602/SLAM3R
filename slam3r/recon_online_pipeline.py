@@ -361,8 +361,12 @@ def select_ids_as_reference(buffering_set_ids, i, next_register_id, num_views, i
             sel_ids.append(i - j * adj_distance)
     
     real_sel_pool_ids = []
+    numi = 0
     for item in sel_pool_ids:
         real_sel_pool_ids.append(buffering_set_ids[item])
+        numi += 1
+        if numi >= win_r:
+            break
     sel_ids += real_sel_pool_ids
     return sel_ids, ref_views, ni, max_id
 

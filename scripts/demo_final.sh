@@ -35,7 +35,7 @@ KEYFRAME_ADAPT_STRIDE=1
 
 GPU_ID=-1
 
-python recon_miao.py \
+python recon.py \
 --test_name $TEST_NAME \
 --dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \

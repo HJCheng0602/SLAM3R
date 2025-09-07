@@ -114,10 +114,12 @@ We also provide a set of images extracted from an in-the-wild captured video. Do
 Set the required parameter in this [script](./scripts/demo_wild.sh), and then run SLAM3R by using the following command
  
  ```bash
- bash scripts/demo_wild.sh
+ bash scripts/demo_final.sh
  ```
 
-When `--save_preds` is set in the script, the per-frame prediction for reconstruction will be saved at `./results/TEST_NAME/preds/`. Then you can visualize the incremental reconstruction process with the following command
+When `--save_preds` is set in the script, the per-frame prediction for reconstruction will be saved at `./results/TEST_NAME/preds/`. Then you can visualize the incremental reconstruction process with the following command.
+
+The `--online`'s existance will determine the reconstruction mode.
 
  ```bash
  bash scripts/demo_vis_wild.sh
@@ -125,21 +127,36 @@ When `--save_preds` is set in the script, the per-frame prediction for reconstru
 
 A Open3D window will appear after running the script. Please click `space key` to record the adjusted rendering view and close the window. The code will then do the rendering of the incremental reconstruction.
 
-You can run SLAM3R on your self-captured video with the steps above. Here are [some tips](./docs/recon_tips.md) for it
+
+You can run SLAM3R on your self-captured video or [ipcamera](https://github.com/shenyaocn/IP-Camera-Bridge) with the steps above. A Simple way is to change the `TEST_DATASET` value according to the tips in the `.sh`file. Besides, feel free to change the **online/offline** mode by adding or remove the `--online` argument in the `.sh` file.
+
+
+
+
+Here are [some tips](./docs/recon_tips.md) for it
 
 
 ## Gradio interface
-We also provide a Gradio interface, where you can upload a directory, a video or specific images to perform the reconstruction. After setting the reconstruction parameters, you can click the 'Run' button to start the process. Modifying the visualization parameters at the bottom allows you to directly display different visualization results without rerunning the inference.
+We also provide two Gradio interface ( one is the **offline** version and the other is **online** version ) , where you can upload a directory, a video , specific images or a ipcamera's url to perform the reconstruction. After setting the reconstruction parameters, you can click the 'Run' button to start the process. Modifying the visualization parameters at the bottom allows you to directly display different visualization results without rerunning the inference.
 
-The interface can be launched with the following command:
+The offline interface can be launched with the following command:
 
  ```bash
- python app.py
+ python app.py --offline
  ```
 
-Here is a demo GIF for the Gradio interface (accelerated).
+Here is a demo GIF for the Gradio offline interface (accelerated).
 
 <img src="media/gradio_office.gif" style="zoom: 66%;" />
+
+Meanwhile, the online interface can be launched with the following command:
+
+```bash
+python app.py --online
+```
+Here is a demo GIF for the Gradio online interface (accelerated).
+
+<img src="media/gradio_online.gif" style="zoom: 66%;" />
 
 
 ## Evaluation on the Replica dataset
