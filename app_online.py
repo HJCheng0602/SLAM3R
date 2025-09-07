@@ -529,6 +529,8 @@ def print_model_viser():
             filtered_colors = flattened_colors[conf_mask]
             
             n_points_in_frame = len(filtered_points)
+            
+            
             n_samples = min(num_points_per_frame, n_points_in_frame)
             
             if n_samples > 0:

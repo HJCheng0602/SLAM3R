@@ -532,6 +532,7 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     local_confs_mean_up2now = []
     adj_distance = kf_stride
     fail_view = {}
+    
 
     assert initial_winsize >= 2, "not enough views for initializing the scene reconstruction"
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
@@ -606,6 +607,8 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
                 # initialize the buffering set with the initial window
                 assert args.buffer_size <= 0 or args.buffer_size >= init_num 
                 buffering_set_ids = [j*kf_stride for j in range(init_num)]
+                import pdb
+                pdb.set_trace()
                 # set ip the woeld coordinates with frames in the initial window
                 for j in range(init_num):
                     input_views[j*kf_stride]['pts3d_world'] = initial_pcds[j]
