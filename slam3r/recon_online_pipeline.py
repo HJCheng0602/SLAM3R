@@ -195,8 +195,6 @@ def scene_frame_retrieve(candi_views:list, src_views:list, i2p_model,
     sel_ids = sel_ids_by_score(patch_corr_scores, align_confs=cand_registered_confs, 
                           sel_num=sel_num, exclude_ids=exclude_ids, use_mask=False, 
                           culmu_count=culmu_count)
-
-
     selected_views = [candi_views[id] for id in sel_ids]
     return selected_views, sel_ids
 
