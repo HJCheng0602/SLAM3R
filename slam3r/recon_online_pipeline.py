@@ -195,8 +195,6 @@ def scene_frame_retrieve(candi_views:list, src_views:list, i2p_model,
     sel_ids = sel_ids_by_score(patch_corr_scores, align_confs=cand_registered_confs, 
                           sel_num=sel_num, exclude_ids=exclude_ids, use_mask=False, 
                           culmu_count=culmu_count)
-
-
     selected_views = [candi_views[id] for id in sel_ids]
     return selected_views, sel_ids
 
@@ -664,6 +662,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                       args.save_all_views, rgb_imgs, registered_confs=per_frame_res['l2w_confs'], 
                       num_points_save=num_points_save, 
                       conf_thres_res=conf_thres_l2w)
+    print(frame_num)
     if args.save_preds:
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)
