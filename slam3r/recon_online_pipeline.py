@@ -10,16 +10,15 @@ import torch
 import matplotlib.pyplot as plt
 plt.ion()
 
-from line_profiler import profile
-
 from slam3r.datasets.wild_seq import Seq_Data
 from slam3r.models import Image2PointsModel, Local2WorldModel, inf
 from slam3r.utils.device import to_numpy
 from slam3r.utils.recon_utils import * 
-from datasets_preprocess.get_webvideo import *
-from slam3r.utils.image import process_single_frame
+from slam3r.datasets.get_webvideo import *
+from slam3r.utils.image import load_single_image
 
-class picture_reader:
+
+class FrameReader:
     """
     Read images from a directory, video file, or online video URL.
     Args:
@@ -57,6 +56,7 @@ class picture_reader:
             print("successful opened! start processing frame by frame...")
         elif self.type == "https":
             self.get_api = Get_online_video(self.dataset)
+            
     def read(self):
         if self.type == "https":
             return self.get_api.cap.read()
@@ -68,6 +68,7 @@ class picture_reader:
             if self.readnum >= len(self.data[0]):
                 return False, None
             return True, self.data[0][self.readnum]
+        
 def save_recon(views, pred_frame_num, save_dir, scene_id, save_all_views=False, 
                       imgs=None, registered_confs=None, 
                       num_points_save=200000, conf_thres_res=3, valid_masks=None):  
@@ -142,7 +143,6 @@ def get_single_img_tokens(views, model, silent=False):
     """get an img token output from encoder,
     which can be reused by both i2p and l2w models
     """
-    
     # Check if the input is a list containing a single view dictionary
     assert isinstance(views, list) and len(views) == 1
     view = views[0]
@@ -225,7 +225,7 @@ def sel_ids_by_score(corr_scores: torch.tensor, align_confs, sel_num,
     sel_ids = torch.argsort(confs, descending=True)[:sel_num]
     return sel_ids
 
-def init_frame_process_method(picture_capture, data_views, rgb_imgs, frame_num, num_views, i, frame, args):
+def get_image_input(frame_reader:FrameReader, data_views, rgb_imgs, frame_num, num_views, i, frame, args):
     """load frame into the method
 
     Args:
@@ -236,45 +236,49 @@ def init_frame_process_method(picture_capture, data_views, rgb_imgs, frame_num, 
         num_views: number of processed views
         i: index of the current view in data_views
         frame: the current frame read from picture_capture
-        args: command line arguments
     """
     frame_num += 1
     num_views += 1
     i += 1
     # Pre-save the RGB images along with their corresponding masks
     # in preparation for visualization at last.
-    if picture_capture.type != "imgs":
-        frame = process_single_frame(frame,224,"cuda")
+    if frame_reader.type != "imgs":
+        frame = load_single_image(frame,224,"cuda")
     else:
         frame['true_shape'] = frame['true_shape'][0]
     data_views.append(frame)
     if data_views[i]['img'].shape[0] == 1:
         data_views[i]['img'] = data_views[i]['img'][0]
     rgb_imgs.append(transform_img(dict(img=data_views[i]['img'][None]))[...,::-1])
+    
     # process now image for extracting its img token with encoder
     data_views[i]['img'] = torch.tensor(data_views[i]['img'][None])
     data_views[i]['true_shape'] = torch.tensor(data_views[i]['true_shape'][None])
+
     for key in ['valid_mask', 'pts3d_cam', 'pts3d']:
         if key in data_views[i]:
-            del data_views[key]
+            del data_views[i][key]
     to_device(data_views[i], device=args.device)
+    
     return frame_num, num_views, i, frame
     
-def encode_single_frame(res_shapes, res_feats, res_poses, input_views, per_frame_res, 
-                        registered_confs_mean, data_views, i, i2p_model):
-    temp_shape, temp_feat, temp_pose = get_single_img_tokens([data_views[i]], i2p_model, True)
+def process_single_frame_input(res_shapes, res_feats, res_poses, 
+                               input_views, per_frame_res, 
+                               registered_confs_mean, data_views, 
+                               frame_id, i2p_model):
+    temp_shape, temp_feat, temp_pose = get_single_img_tokens([data_views[frame_id]], i2p_model, True)
     res_shapes.append(temp_shape[0])
     res_feats.append(temp_feat[0])
     res_poses.append(temp_pose[0])
-    print(f"finish pre-extracting img token of view {i}")
+    print(f"finish pre-extracting img token of view {frame_id}")
 
-    input_views.append(dict(label=data_views[i]['label'],
+    input_views.append(dict(label=data_views[frame_id]['label'],
                             img_tokens=temp_feat[0],
-                            true_shape=data_views[i]['true_shape'],
+                            true_shape=data_views[frame_id]['true_shape'],
                             img_pos=temp_pose[0]))
     for key in per_frame_res:
         per_frame_res[key].append(None)
-    registered_confs_mean.append(i)
+    registered_confs_mean.append(frame_id)
     
 
 def register_initial_window_frames(init_num, kf_stride, buffering_set_ids, input_views, 
@@ -362,8 +366,8 @@ def select_ids_as_reference(buffering_set_ids, i, next_register_id, num_views, i
     
     real_sel_pool_ids = []
     numi = 0
-    for item in sel_pool_ids:
-        real_sel_pool_ids.append(buffering_set_ids[item])
+    for pool_id in sel_pool_ids:
+        real_sel_pool_ids.append(buffering_set_ids[pool_id])
         numi += 1
         if numi >= win_r:
             break
@@ -527,7 +531,7 @@ def update_buffer_set(next_register_id, update_buffer_intv, max_buffer_size, kf_
 
 def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                          l2w_model:Local2WorldModel,
-                         picture_capture:picture_reader,
+                         frame_reader:FrameReader,
                          args,
                          save_dir = "results"):
     win_r = args.win_r
@@ -537,8 +541,8 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
     conf_thres_i2p = args.conf_thres_i2p
     num_points_save = args.num_points_save
     kf_stride = args.keyframe_stride
-    
-    scene_id = "demo_output"
+
+    scene_id = "online_demo"
     data_views = []
     num_views = 0
     rgb_imgs = []
@@ -556,22 +560,23 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
     registered_confs_mean = []
     i = -1
     frame_num = 0
-    success, frame = picture_capture.read()
+    success, frame = frame_reader.read()
     if not success:
         return
 
     
     while frame is not None:
         if frame_num % args.perframe == 0:
-            frame_num, num_views, i, frame = init_frame_process_method(picture_capture, data_views, rgb_imgs,
-                                      frame_num, num_views, i, frame, args)
-            encode_single_frame(res_shapes, res_feats, res_poses, input_views
+            frame_num, num_views, i, frame = get_image_input(frame_reader, data_views, 
+                                                             rgb_imgs, frame_num, num_views, 
+                                                             i, frame, args)
+            process_single_frame_input(res_shapes, res_feats, res_poses, input_views
                                 ,per_frame_res, registered_confs_mean, data_views, i
                                 ,i2p_model)
             
             # accumulate enough frames for scene initialization
             if i < (initial_winsize - 1) * kf_stride:
-                success, frame = picture_capture.read()
+                success, frame = frame_reader.read()
                 # continue to read next frame
                 if not success:
                     return
@@ -610,7 +615,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 max_buffer_size = args.buffer_size
                 strategy = args.buffer_strategy
                 candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
-                success, frame = picture_capture.read()
+                success, frame = frame_reader.read()
                 if not success:
                     break
                 continue
@@ -651,19 +656,20 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 pass
             
             frame_num += 1
-            success, frame = picture_capture.read()
-            
+            success, frame = frame_reader.read()
             if not success:
                 break
         else:
-            success, frame = picture_capture.read()
+            success, frame = frame_reader.read()
             frame_num += 1
             if not success:
                 break
+            
     save_recon(input_views, num_views, save_dir, scene_id, 
                       args.save_all_views, rgb_imgs, registered_confs=per_frame_res['l2w_confs'], 
                       num_points_save=num_points_save, 
                       conf_thres_res=conf_thres_l2w)
+    
     if args.save_preds:
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)

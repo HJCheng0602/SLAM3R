@@ -13,10 +13,15 @@ from slam3r.datasets.wild_seq import Seq_Data
 from slam3r.models import Image2PointsModel, Local2WorldModel, inf
 from slam3r.utils.device import to_numpy
 from slam3r.utils.recon_utils import * 
+
+
 def save_recon(views, pred_frame_num, save_dir, scene_id, save_all_views=False, 
                       imgs=None, registered_confs=None, 
                       num_points_save=200000, conf_thres_res=3, valid_masks=None):  
-
+    """
+    Save the reconstructed point cloud.
+    """
+    
     save_name = f"{scene_id}_recon.ply"
     
     # collect the registered point clouds and rgb colors
@@ -302,8 +307,6 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
         to_device(view, device=args.device)
     # pre-extract img tokens by encoder, which can be reused 
     # in the following inference by both i2p and l2w models
-    
-    
     res_shapes, res_feats, res_poses = get_img_tokens(data_views, i2p_model)    # 300+fps
     print('finish pre-extracting img tokens')
 
@@ -562,6 +565,7 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
                       num_points_save=num_points_save, 
                       conf_thres_res=conf_thres_l2w, valid_masks=valid_masks)
 
+    # save all the per-frame predictions for further analysis
     if args.save_preds:
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)
@@ -578,7 +582,7 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
                         init_ref_id=init_ref_id)
         with open(join(preds_dir, 'metadata.json'), 'w') as f:
             json.dump(metadata, f)
-
+    # save the reconstructed point clouds and confidences for evaluation
     elif args.save_for_eval:
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)

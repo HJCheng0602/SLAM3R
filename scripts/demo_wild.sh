@@ -2,20 +2,19 @@
 
 
 ######################################################################################
-# set the img_dir below to the directory of the set of images you want to reconstruct
-# set the postfix below to the format of the rgb images in the img_dir
+# Your input can be a directory of images, a video file, and a webcamera url.
+# For directory of images, set the TEST_DATASET to path like: data/test/myimages
+# For video, set the TEST_DATASET to path like: data/test/myvideo.mp4
+# For webcamera, set the TEST_DATASET to url like: http://rab:12345678@192.168.137.83:8081
 ######################################################################################
 TEST_DATASET="data/wild/Library" 
 
-# if imgs, you just need to input the dictionary path;
-#if video, you need to input the video path like : data/test/myvideo.mp4
-# if webcamera you need to input the url like: http://rab:12345678@192.168.137.83:8081
 
 ######################################################################################
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
 ######################################################################################
-TEST_NAME="unified_slam3r_reconstruction"
+TEST_NAME="Wild_demo"
 KEYFRAME_STRIDE=3     #-1 for auto-adaptive keyframe stride selection
 WIN_R=5
 MAX_NUM_REGISTER=10
@@ -54,6 +53,4 @@ python recon.py \
 --keyframe_adapt_max $KEYFRAME_ADAPT_MAX \
 --keyframe_adapt_stride $KEYFRAME_ADAPT_STRIDE \
 --save_preds \
---online
-
-# if you want to reconstruct it offline, please remove the "--online" attr.
+# --online  # Uncomment it if you want to reconstruct it online

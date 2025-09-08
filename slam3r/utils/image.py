@@ -156,18 +156,18 @@ def load_images(folder_or_list, size, square_ok=False,
         print(f' ({len(imgs)} images loaded)')
     return imgs
 
-def process_single_frame(frame_bgr: np.ndarray, 
+def load_single_image(frame_bgr: np.ndarray, 
                          size: int = 224, 
                          square_ok: bool = False,
                          device: str = 'cpu') -> dict:
     """
-    处理单帧NumPy数组，其处理逻辑与原始的 load_images 函数严格一致。
-
-    :param frame_bgr: 输入的NumPy图像数组 (H, W, 3)，必须是OpenCV默认的BGR顺序。
-    :param size: 目标尺寸，通常为224。
-    :param square_ok: 是否允许方形输出（当size不为224时）。
-    :param device: 输出Tensor存放的设备 ('cpu' 或 'cuda')。
-    :return: 一个包含处理后图像信息的标准字典。
+    Process a single frame given as a NumPy array, following the same logic as the original load_images function.
+    
+    :param frame_bgr: Input NumPy image array (H, W, 3), must be in OpenCV's default BGR order.
+    :param size: Target size, typically 224.
+    :param square_ok: Whether to allow square output (when size is not 224).
+    :param device: Device to place the output Tensor ('cpu' or 'cuda').
+    :return: A standard dictionary containing the processed image information.
     """
     img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     img = PIL.Image.fromarray(img_rgb)

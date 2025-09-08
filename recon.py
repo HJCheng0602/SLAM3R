@@ -1,4 +1,4 @@
-from slam3r.recon_online_pipeline import scene_recon_pipeline_online, picture_reader
+from slam3r.recon_online_pipeline import scene_recon_pipeline_online, FrameReader
 from slam3r.recon_offline_pipeline import scene_recon_pipeline_offline
 import argparse
 from slam3r.utils.recon_utils import * 
@@ -78,15 +78,13 @@ parser.add_argument("--keyframe_adapt_max", type=int, default=20,
                     help="maximal stride of sampling keyframes when auto adaptation")
 parser.add_argument("--keyframe_adapt_stride", type=int, default=1, 
                     help="stride for trying different keyframe stride")
-parser.add_argument("--perframe",type=int,default=1)
-parser.add_argument("--enable_viewer",type=bool,default=False, help="whether to visualize the reconstruct progress.")
+parser.add_argument("--perframe", type=int, default=1)
 
 parser.add_argument("--seed", type=int, default=42, help="seed for python random")
 parser.add_argument('--gpu_id', type=int, default=-1, help='gpu id, -1 for auto select')
 parser.add_argument('--save_preds', action='store_true', help='whether to save all per-frame preds')    
 parser.add_argument('--save_for_eval', action='store_true', help='whether to save partial per-frame preds for evaluation')   
-parser.add_argument("--online", action="store_true", 
-                    help="whether to reconstruct online")
+parser.add_argument("--online", action="store_true", help="whether to implement online reconstruction")
 
 if __name__ == "__main__":
     args = parser.parse_args()
@@ -112,10 +110,11 @@ if __name__ == "__main__":
     i2p_model.eval()
     l2w_model.eval()
     
+    save_dir = os.path.join(args.save_dir, args.test_name)
+    os.makedirs(save_dir, exist_ok=True)
+    
     if args.online:
-        picture_capture = picture_reader(args.dataset)
-        save_dir = os.path.join(args.save_dir, args.test_name)
-        os.makedirs(save_dir, exist_ok=True)
+        picture_capture = FrameReader(args.dataset)
         scene_recon_pipeline_online(i2p_model, l2w_model, picture_capture, args, save_dir)
     else:
         if args.dataset:
@@ -127,7 +126,6 @@ if __name__ == "__main__":
             dataset = Seq_Data(img_dir=args.img_dir, img_size=224, to_tensor=True)
         if hasattr(dataset, "set_epoch"):
             dataset.set_epoch(0)
-        save_dir = os.path.join(args.save_dir, args.test_name)
-        os.makedirs(save_dir, exist_ok=True)
+
         scene_recon_pipeline_offline(i2p_model, l2w_model, dataset, args, save_dir)
         

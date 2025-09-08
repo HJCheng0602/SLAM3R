@@ -45,17 +45,26 @@ TL;DR: A real-time RGB SLAM system that performs dense 3D reconstruction via poi
 
 ## News
 
+* **2025-09:** We have released the code for WebCam input and online reconstruction.
+
 * **2025-04:** SLAM3R is reported by [机器之心(Chinese)](https://mp.weixin.qq.com/s/fK5vJwbogcfwoduI9FuQ6w) 
 
 * **2025-04:** 🎉 SLAM3R is selected as a **highlight paper** in CVPR 2025 and **Top1 paper** in China3DV 2025.
 
 ## Table of Contents
 
+- [News](#news)
+- [Table of Contents](#table-of-contents)
 - [Installation](#installation)
 - [Demo](#demo)
+  - [Replica dataset](#replica-dataset)
+  - [Self-captured outdoor data](#self-captured-outdoor-data)
 - [Gradio interface](#gradio-interface)
-- [Evaluation on the Replica dataset](#Evaluation-on-the-Replica-dataset)
+- [Evaluation on the Replica dataset](#evaluation-on-the-replica-dataset)
 - [Training](#training)
+  - [Datasets](#datasets)
+  - [Pretrained weights](#pretrained-weights)
+  - [Start training](#start-training)
 - [Citation](#citation)
 - [Acknowledgments](#acknowledgments)
 
@@ -100,7 +109,7 @@ The pre-trained model weights will automatically download when running the demo 
 
 ## Demo
 ### Replica dataset
-To run our demo on Replica dataset, download the sample scene [here](https://drive.google.com/file/d/1NmBtJ2A30qEzdwM0kluXJOp2d1Y4cRcO/view?usp=drive_link) and unzip it to `./data/Replica_demo/`. Then run the following command to reconstruct the scene from the video images 
+To run our demo on Replica dataset, download the sample scene [here](https://drive.google.com/file/d/1NmBtJ2A30qEzdwM0kluXJOp2d1Y4cRcO/view?usp=drive_link) and unzip it to `./data/Replica_demo/`. Then run the following command to reconstruct the scene from the video images: 
 
  ```bash
  bash scripts/demo_replica.sh
@@ -111,15 +120,13 @@ The results will be stored at `./results/` by default.
 ### Self-captured outdoor data
 We also provide a set of images extracted from an in-the-wild captured video. Download it [here](https://drive.google.com/file/d/1FVLFXgepsqZGkIwg4RdeR5ko_xorKyGt/view?usp=drive_link) and unzip it to `./data/wild/`.  
 
-Set the required parameter in this [script](./scripts/demo_wild.sh), and then run SLAM3R by using the following command
+Set the required parameter in this [script](./scripts/demo_wild.sh), and then run SLAM3R by using the following command:
  
  ```bash
- bash scripts/demo_final.sh
+ bash scripts/demo_wild.sh
  ```
 
-When `--save_preds` is set in the script, the per-frame prediction for reconstruction will be saved at `./results/TEST_NAME/preds/`. Then you can visualize the incremental reconstruction process with the following command.
-
-The `--online`'s existance will determine the reconstruction mode.
+When `--save_preds` is set in the script, the per-frame prediction for reconstruction will be saved at `./results/TEST_NAME/preds/`. Then you can visualize the incremental reconstruction process with the following command:
 
  ```bash
  bash scripts/demo_vis_wild.sh
@@ -127,25 +134,21 @@ The `--online`'s existance will determine the reconstruction mode.
 
 A Open3D window will appear after running the script. Please click `space key` to record the adjusted rendering view and close the window. The code will then do the rendering of the incremental reconstruction.
 
+You can also run SLAM3R on your self-captured video or [WebCam](https://github.com/shenyaocn/IP-Camera-Bridge) with the steps above. You can also select `offline/online` mode for reconstruction. Check the comments in the [script](./scripts/demo_wild.sh) for more details.
 
-You can run SLAM3R on your self-captured video or [ipcamera](https://github.com/shenyaocn/IP-Camera-Bridge) with the steps above. A Simple way is to change the `TEST_DATASET` value according to the tips in the `.sh`file. Besides, feel free to change the **online/offline** mode by adding or remove the `--online` argument in the `.sh` file.
-
-
-
-
-Here are [some tips](./docs/recon_tips.md) for it
+Here are [more tips](./docs/recon_tips.md) for the argument settings in the reconstruction script.
 
 
 ## Gradio interface
-We also provide two Gradio interface ( one is the **offline** version and the other is **online** version ) , where you can upload a directory, a video , specific images or a ipcamera's url to perform the reconstruction. After setting the reconstruction parameters, you can click the 'Run' button to start the process. Modifying the visualization parameters at the bottom allows you to directly display different visualization results without rerunning the inference.
+We also provide two Gradio interfaces for online/offline reconstruction respectively, where you can upload a directory, a video , specific images or a ipcamera's url (online only) to perform the reconstruction. After setting the reconstruction parameters, you can click the 'Run' button to start the process. Modifying the visualization parameters at the bottom allows you to directly display different visualization results without rerunning the inference.
 
 The offline interface can be launched with the following command:
 
  ```bash
- python app.py --offline
+ python app.py
  ```
 
-Here is a demo GIF for the Gradio offline interface (accelerated).
+Here is a demo GIF for the Gradio interface for offline reconstruction (accelerated).
 
 <img src="media/gradio_office.gif" style="zoom: 66%;" />
 
@@ -154,7 +157,7 @@ Meanwhile, the online interface can be launched with the following command:
 ```bash
 python app.py --online
 ```
-Here is a demo GIF for the Gradio online interface (accelerated).
+Here is a demo GIF for the Gradio interface for online reconstruction (accelerated). A Viser viewer is attached to show the incremental reconstruction process.
 
 <img src="media/gradio_online.gif" style="zoom: 66%;" />
 

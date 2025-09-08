@@ -1,10 +1,8 @@
 #!/bin/bash
 
-######################################################################################
-# set the img_dir below to the directory of the set of images you want to reconstruct
-# set the postfix below to the format of the rgb images in the img_dir
-######################################################################################
+
 TEST_DATASET="data/Replica_demo/room0"
+
 
 ######################################################################################
 # set the parameters for whole scene reconstruction below

@@ -15,8 +15,8 @@ from slam3r.datasets.wild_seq import Seq_Data
 from slam3r.models import Local2WorldModel, Image2PointsModel
 from slam3r.utils.device import to_numpy
 from slam3r.utils.recon_utils import *
-from datasets_preprocess.get_webvideo import *
-from slam3r.utils.image import process_single_frame
+from slam3r.datasets.get_webvideo import *
+from slam3r.utils.image import load_single_image
 from slam3r.recon_online_pipeline import *
 
 point_cloud_queue = Queue()
@@ -53,7 +53,7 @@ def extract_frames(video_path: str, fps: float) -> str:
     subprocess.run(command, check=True)
     return temp_dir
 
-class picture_reader:
+class FrameReader:
     def __init__(self, dataset):
         # detect the type of the input data
         self.dataset = dataset
@@ -132,7 +132,7 @@ def recon_scene(i2p_model:Image2PointsModel,
         source = img_dir_or_list
     
     
-    dataset = picture_reader(source)
+    dataset = FrameReader(source)
     success, frame = dataset.read()  
     if not success:
         return
@@ -151,9 +151,9 @@ def recon_scene(i2p_model:Image2PointsModel,
 
     while frame is not None:
         if frame_num % fps == 0:    
-            frame_num, num_views, i, frame = init_frame_process_method(dataset, data_views, rgb_imgs,
+            frame_num, num_views, i, frame = get_image_input(dataset, data_views, rgb_imgs,
                                       frame_num, num_views, i, frame, args)
-            encode_single_frame(res_shapes, res_feats, res_poses, input_views
+            process_single_frame_input(res_shapes, res_feats, res_poses, input_views
                                 ,per_frame_res, registered_confs_mean, data_views, i
                                 ,i2p_model)
             # accumulate the initial window frames
@@ -673,8 +673,8 @@ def main(parser):
         main_demo(i2p_model, l2w_model, args.device, tmpdirname, server_name, args.server_port)
 
 
-def main_online(parser):
-    productor = threading.Thread(target=main,args=(parser, ))
+def main_online(args):
+    productor = threading.Thread(target=main,args=(args, ))
     displayer = threading.Thread(target=print_model_viser)
     
     productor.start()
