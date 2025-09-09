@@ -452,7 +452,8 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
     # register the rest frames with L2W model
     next_register_id = (init_num-1)*kf_stride+1 # the next frame to be registered
     milestone = (init_num-1)*kf_stride+1 # All frames before milestone have undergone the selection process for entry into the buffering set.
-    num_register = max(1,min((kf_stride+1)//2, args.max_num_register))   # how many frames to register in each round
+    # num_register = max(1,min((kf_stride+1)//2, args.max_num_register))   # how many frames to register in each round
+    num_register = 1
     update_buffer_intv = kf_stride*args.update_buffer_intv   # update the buffering set every update_buffer_intv frames
     max_buffer_size = args.buffer_size
     strategy = args.buffer_strategy

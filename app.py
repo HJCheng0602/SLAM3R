@@ -23,8 +23,8 @@ if __name__ == "__main__":
     
     if args.online:
         print("start the online mode")
-        main_online(args)
+        main_online(parser)
     else:
         print("start the offline mode")
-        main_offline(args)
+        main_offline(parser)
         
