@@ -158,7 +158,7 @@ def recon_scene(i2p_model:Image2PointsModel,
         
         if num_frame_pass % fps == 0: 
             num_views += 1   
-            num_views, frame, data_views, rgb_imgs\
+            frame, data_views, rgb_imgs\
                 = get_raw_input_frame(dataset, data_views, rgb_imgs,
                                       num_views, frame, args)
             
@@ -208,7 +208,7 @@ def recon_scene(i2p_model:Image2PointsModel,
                         per_frame_res['l2w_confs'][ii*keyframe_stride] *= factor
                         registered_confs_mean[ii*keyframe_stride] = per_frame_res['l2w_confs'][ii*keyframe_stride].mean().cpu()
                         
-                # register the rest frames with L2W model
+                # # prepare for the next online reconstruction
                 next_register_id = (init_num - 1) * keyframe_stride + 1
                 milestone = init_num * keyframe_stride + 1
                 update_buffer_intv = keyframe_stride*update_buffer_intv   # update the buffering set every update_buffer_intv frames
@@ -218,17 +218,9 @@ def recon_scene(i2p_model:Image2PointsModel,
                 point_cloud_queue.put((per_frame_res["l2w_pcds"][num_views][0], rgb_imgs[num_views], per_frame_res['l2w_confs'][num_views]))   
                 continue
 
-            # start recovering the online views
-            # skip the views in the initial window
-            if num_views in buffering_set_ids:
-                # trick to mark the keyframe in the initial window
-                if num_views // keyframe_stride == init_ref_id:
-                    per_frame_res['i2p_pcds'][num_views] = per_frame_res['l2w_pcds'][num_views].cpu()
-                else:
-                    per_frame_res['i2p_pcds'][num_views] = torch.zeros_like(per_frame_res['l2w_pcds'][num_views], device="cpu")
-                per_frame_res['i2p_confs'][num_views] = per_frame_res['l2w_confs'][num_views].cpu()
-                continue
-            sel_ids, ref_views, ni, max_id, temp_sel_ids = select_ids_as_reference(buffering_set_ids, next_register_id, 
+            # after the initial window
+            # select the reference views for the current view
+            sel_ids, ref_views, max_id, temp_sel_ids = select_ids_as_reference(buffering_set_ids, next_register_id, 
                                                 num_views, input_views, i2p_model, num_scene_frame, win_r,
                                                 adj_distance, temp_sel_ids, ref_views)
             
@@ -242,7 +234,7 @@ def recon_scene(i2p_model:Image2PointsModel,
             next_register_id, input_views, \
                 per_frame_res, registered_confs_mean \
                     = register_online_view(ref_views, input_views, l2w_model, args,
-                                 max_id, ni, per_frame_res, registered_confs_mean, num_views, next_register_id)
+                                 max_id, per_frame_res, registered_confs_mean, num_views, next_register_id)
             
             if next_register_id - milestone >= update_buffer_intv:
                 milestone, candi_frame_id, \

@@ -251,7 +251,7 @@ def get_raw_input_frame(input_type, data_views, rgb_imgs, num_views, frame, args
             del data_views[num_views][key]
     to_device(data_views[num_views], device=args.device)
     
-    return num_views, frame, data_views, rgb_imgs
+    return frame, data_views, rgb_imgs
     
 def process_input_frame(res_shapes, res_feats, res_poses, 
                                input_views, per_frame_res, 
@@ -282,8 +282,8 @@ def register_initial_window_frames(init_num, kf_stride, buffering_set_ids, input
     for view_id in tqdm(range((init_num - 1) * kf_stride), desc="pre-registering"):
         if view_id % kf_stride == 0:
             continue
+        
         # construct the input for L2W model
-
         l2w_input_views = [input_views[view_id]] + [input_views[id] for id in buffering_set_ids]
         # (for defination of ref_ids, seee the doc of l2w_model)
         output = l2w_inference(l2w_input_views, l2w_model,
@@ -374,7 +374,7 @@ def select_ids_as_reference(buffering_set_ids, next_register_id,
         if num_views - j * adj_distance >= 0:
             sel_ids.append(num_views - j * adj_distance)
     
-    return sel_ids, ref_views, ni, max_id, real_sel_pool_ids
+    return sel_ids, ref_views, max_id, real_sel_pool_ids
 
 def initial_scene_for_accumulated_frames(input_views, initial_winsize, 
                                          kf_stride, i2p_model, per_frame_res, 
@@ -407,7 +407,7 @@ def initial_scene_for_accumulated_frames(input_views, initial_winsize,
         
     return buffering_set_ids, init_ref_id, init_num, input_views, per_frame_res, registered_confs_mean
 
-def recover_points_in_initial_window(frame_id, buffering_set_ids, 
+def recover_points_in_initial_window(num_views, buffering_set_ids, 
                                      kf_stride, init_ref_id, 
                                      per_frame_res, win_r, 
                                      adj_distance, input_views, 
@@ -416,7 +416,7 @@ def recover_points_in_initial_window(frame_id, buffering_set_ids,
     recover the points in their local coordinates for all frames up to now
     """
 
-    for view_id in range(frame_id + 1):
+    for view_id in range(num_views + 1):
         # skip the views in the initial window
         if view_id in buffering_set_ids:
             # trick to mark the keyframe in the initial window
@@ -432,7 +432,7 @@ def recover_points_in_initial_window(frame_id, buffering_set_ids,
         for j in range(1, win_r + 1):
             if view_id - j * adj_distance >= 0:
                 sel_ids.append(view_id - j * adj_distance)
-            if view_id + j * adj_distance < frame_id:
+            if view_id + j * adj_distance < num_views:
                 sel_ids.append(view_id + j * adj_distance)
         local_views = [input_views[id] for id in sel_ids]
         ref_id = 0
@@ -476,7 +476,7 @@ def recover_points_in_online_views(local_views, i2p_model,
     return local_confs_mean_up2now, per_frame_res, input_views, 
 
 def register_online_view(ref_views, input_views, l2w_model,
-                         args, max_id, ni, per_frame_res, 
+                         args, max_id, per_frame_res, 
                          registered_confs_mean, num_views, next_register_id):
     
     view_to_register = input_views[num_views]
@@ -488,12 +488,13 @@ def register_online_view(ref_views, input_views, l2w_model,
                             normalize=args.norm_input)
     
     # process the output of L2W model
-    src_ids_local = [id + len(ref_views) for id in range(max_id - ni + 1)]
-    src_ids_global = [id for id in range(ni, max_id + 1)]
+    src_ids_local = [id + len(ref_views) for id in range(max_id - next_register_id + 1)]
+    src_ids_global = [id for id in range(next_register_id, max_id + 1)]
 
     output_id = src_ids_local[0] # the id of the output in the output list
     view_id = src_ids_global[0]    # the id of the view in all views
     conf_map = output[output_id]['conf'] # 1,224,224
+
     input_views[view_id]['pts3d_world'] = output[output_id]['pts3d_in_other_view'] # 1,224,224,3
     per_frame_res['l2w_confs'][view_id] = conf_map[0]
     registered_confs_mean[view_id] = conf_map[0].mean().cpu()
@@ -513,8 +514,6 @@ def update_buffer_set(next_register_id, max_buffer_size,
         buffering_set_ids: used for buffering the registered views
         strategy: used for selecting the views to be buffered
         candi_frame_id: used for reservoir sampling
-        milestone: 
-
     """
     while(next_register_id - milestone >= kf_stride):
         candi_frame_id += 1
@@ -588,17 +587,17 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
     registered_confs_mean = []
     num_views = -1
-    frame_num = -1
+    num_frame_pass = -1
     
     while True:
         success, frame = frame_reader.read()
         if not success:
             break
-        frame_num += 1
+        num_frame_pass += 1
         
-        if frame_num % args.perframe == 0:
+        if num_frame_pass % args.perframe == 0:
             num_views += 1
-            num_views, frame, data_views, rgb_imgs = get_raw_input_frame(
+            frame, data_views, rgb_imgs = get_raw_input_frame(
                                                 frame_reader.type, data_views, 
                                                 rgb_imgs, num_views, 
                                                 frame, args)
@@ -633,9 +632,10 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 
                 # Special treatment: register the frames within the range of initial window with L2W model
                 if kf_stride > 1:
-                    max_conf_mean, input_views, \
-                        per_frame_res = register_initial_window_frames(init_num, kf_stride, buffering_set_ids,
-                                                   input_views, l2w_model, args, per_frame_res, registered_confs_mean)
+                    max_conf_mean, input_views, per_frame_res = \
+                        register_initial_window_frames(init_num, kf_stride, buffering_set_ids,
+                                                       input_views, l2w_model, args, per_frame_res, 
+                                                       registered_confs_mean)
                     # A problem is that the registered_confs_mean of the initial window is generated by I2P model,
                     # while the registered_confs_mean of the frames within the initial window is generated by L2W model,
                     # so there exists a gap. Here we try to align it.
@@ -649,7 +649,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                         per_frame_res['l2w_confs'][ii*kf_stride] *= factor
                         registered_confs_mean[ii*kf_stride] = per_frame_res['l2w_confs'][ii*kf_stride].mean().cpu()
                 
-                # register the rest frames with L2W model
+                # prepare for the next online reconstruction
                 next_register_id = (init_num - 1) * kf_stride + 1
                 milestone = init_num * kf_stride + 1
                 update_buffer_intv = kf_stride*args.update_buffer_intv   # update the buffering set every update_buffer_intv frames
@@ -658,18 +658,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
                 continue
             
-            # start recovering the online views
-            # skip the views in the initial window
-            if num_views in buffering_set_ids:
-                # trick to mark the keyframe in the initial window
-                if num_views // kf_stride == init_ref_id:
-                    per_frame_res['i2p_pcds'][num_views] = per_frame_res['l2w_pcds'][num_views].cpu()
-                else:
-                    per_frame_res['i2p_pcds'][num_views] = torch.zeros_like(per_frame_res['l2w_pcds'][num_views], device="cpu")
-                per_frame_res['i2p_confs'][num_views] = per_frame_res['l2w_confs'][num_views].cpu()
-                continue
-
-            sel_ids, ref_views, ni, max_id, temp_sel_ids = select_ids_as_reference(buffering_set_ids, next_register_id, 
+            sel_ids, ref_views, max_id, temp_sel_ids = select_ids_as_reference(buffering_set_ids, next_register_id, 
                                                 num_views, input_views, i2p_model, num_scene_frame, win_r,
                                                 adj_distance, temp_sel_ids, ref_views)
 
@@ -683,8 +672,8 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 
             next_register_id, input_views, per_frame_res, registered_confs_mean \
                     = register_online_view(ref_views, input_views, l2w_model, args,
-                                 max_id, ni, per_frame_res, registered_confs_mean, num_views, next_register_id)
-            
+                                max_id, per_frame_res, registered_confs_mean, num_views, next_register_id)
+
             if next_register_id - milestone >= update_buffer_intv:
                 milestone, candi_frame_id, buffering_set_ids = update_buffer_set(
                                                 next_register_id, update_buffer_intv, 
