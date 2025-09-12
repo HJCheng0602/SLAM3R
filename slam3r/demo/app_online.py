@@ -162,11 +162,13 @@ def recon_scene(i2p_model:Image2PointsModel,
                 = get_raw_input_frame(dataset, data_views, rgb_imgs,
                                       num_views, frame, args)
             
-            res_shapes, res_feats,  res_poses, input_views,\
-            per_frame_res, registered_confs_mean = \
-                process_input_frame(res_shapes, res_feats, res_poses, input_views
-                                ,per_frame_res, registered_confs_mean, data_views, num_views
-                                ,i2p_model)
+            res_shapes, res_feats, res_poses, input_view, per_frame_res, registered_confs_mean =\
+                                process_input_frame(
+                                    res_shapes, res_feats, res_poses,
+                                    per_frame_res, registered_confs_mean, 
+                                    data_views, num_views, i2p_model)
+            input_views.append(input_view)
+            
             # accumulate the initial window frames
             if num_views < (initial_winsize - 1)*keyframe_stride:
                 continue
@@ -228,12 +230,12 @@ def recon_scene(i2p_model:Image2PointsModel,
             ref_id = 0
 
             local_confs_mean_up2now, per_frame_res, input_views\
-                = recover_points_in_online_views(local_views, i2p_model, num_views, ref_id, per_frame_res,
+                = pointmap_local_recon(local_views, i2p_model, num_views, ref_id, per_frame_res,
                                            input_views, conf_thres_i2p, local_confs_mean_up2now)
                 
             next_register_id, input_views, \
                 per_frame_res, registered_confs_mean \
-                    = register_online_view(ref_views, input_views, l2w_model, args,
+                    = pointmap_global_register(ref_views, input_views, l2w_model, args,
                                  max_id, per_frame_res, registered_confs_mean, num_views, next_register_id)
             
             if next_register_id - milestone >= update_buffer_intv:

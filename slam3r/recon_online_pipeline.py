@@ -221,7 +221,7 @@ def sel_ids_by_score(corr_scores: torch.tensor, align_confs, sel_num,
     sel_ids = torch.argsort(confs, descending=True)[:sel_num]
     return sel_ids
 
-def get_raw_input_frame(input_type, data_views, rgb_imgs, num_views, frame, args):
+def get_raw_input_frame(input_type, data_views, rgb_imgs, current_frame_id, frame, args):
     """ process the input image for reconstruction
 
     Args:
@@ -238,39 +238,34 @@ def get_raw_input_frame(input_type, data_views, rgb_imgs, num_views, frame, args
     else:
         frame['true_shape'] = frame['true_shape'][0]
     data_views.append(frame)
-    if data_views[num_views]['img'].shape[0] == 1:
-        data_views[num_views]['img'] = data_views[num_views]['img'][0]
-    rgb_imgs.append(transform_img(dict(img=data_views[num_views]['img'][None]))[...,::-1])
+    if data_views[current_frame_id]['img'].shape[0] == 1:
+        data_views[current_frame_id]['img'] = data_views[current_frame_id]['img'][0]
+    rgb_imgs.append(transform_img(dict(img=data_views[current_frame_id]['img'][None]))[...,::-1])
     
     # process now image for extracting its img token with encoder
-    data_views[num_views]['img'] = torch.tensor(data_views[num_views]['img'][None])
-    data_views[num_views]['true_shape'] = torch.tensor(data_views[num_views]['true_shape'][None])
+    data_views[current_frame_id]['img'] = torch.tensor(data_views[current_frame_id]['img'][None])
+    data_views[current_frame_id]['true_shape'] = torch.tensor(data_views[current_frame_id]['true_shape'][None])
 
     for key in ['valid_mask', 'pts3d_cam', 'pts3d']:
-        if key in data_views[num_views]:
-            del data_views[num_views][key]
-    to_device(data_views[num_views], device=args.device)
+        if key in data_views[current_frame_id]:
+            del data_views[current_frame_id][key]
+    to_device(data_views[current_frame_id], device=args.device)
     
     return frame, data_views, rgb_imgs
     
-def process_input_frame(res_shapes, res_feats, res_poses, 
-                               input_views, per_frame_res, 
-                               registered_confs_mean, data_views, 
-                               frame_id, i2p_model):
+def process_input_frame(per_frame_res, registered_confs_mean, 
+                        data_views, frame_id, i2p_model):
     temp_shape, temp_feat, temp_pose = get_single_img_tokens([data_views[frame_id]], i2p_model, True)
-    res_shapes.append(temp_shape[0])
-    res_feats.append(temp_feat[0])
-    res_poses.append(temp_pose[0])
     # print(f"finish pre-extracting img token of view {frame_id}")
 
-    input_views.append(dict(label=data_views[frame_id]['label'],
+    input_view = dict(label=data_views[frame_id]['label'],
                             img_tokens=temp_feat[0],
                             true_shape=data_views[frame_id]['true_shape'],
-                            img_pos=temp_pose[0]))
+                            img_pos=temp_pose[0])
     for key in per_frame_res:
         per_frame_res[key].append(None)
     registered_confs_mean.append(frame_id)
-    return res_shapes, res_feats,  res_poses, input_views, per_frame_res, registered_confs_mean
+    return input_view, per_frame_res, registered_confs_mean
     
 
 def register_initial_window_frames(init_num, kf_stride, buffering_set_ids, input_views, 
@@ -335,7 +330,7 @@ def initialize_scene(views:list, model:Image2PointsModel, winsize=5, conf_thres=
         return initial_pcds, initial_confs, init_ref_id
     return initial_pcds, initial_confs
 
-def select_ids_as_reference(buffering_set_ids, next_register_id, 
+def select_ids_as_reference(buffering_set_ids, current_frame_id,
                             num_views, input_views, i2p_model, 
                             num_scene_frame, win_r, adj_distance, 
                             temp_sel_pool_ids, temp_ref_views):
@@ -344,7 +339,7 @@ def select_ids_as_reference(buffering_set_ids, next_register_id,
     next_register_id: the id of the next view to be registered
     """
 
-    ni = next_register_id
+    ni = current_frame_id + 1
     max_id = num_views + 1
     # select sccene frames in the buffering set to work as a global reference
     cand_ref_ids = buffering_set_ids
@@ -407,7 +402,7 @@ def initial_scene_for_accumulated_frames(input_views, initial_winsize,
         
     return buffering_set_ids, init_ref_id, init_num, input_views, per_frame_res, registered_confs_mean
 
-def recover_points_in_initial_window(num_views, buffering_set_ids, 
+def recover_points_in_initial_window(window_last_id, buffering_set_ids, 
                                      kf_stride, init_ref_id, 
                                      per_frame_res, win_r, 
                                      adj_distance, input_views, 
@@ -416,8 +411,8 @@ def recover_points_in_initial_window(num_views, buffering_set_ids,
     recover the points in their local coordinates for all frames up to now
     """
 
-    for view_id in range(num_views + 1):
-        # skip the views in the initial window
+    for view_id in range(window_last_id + 1):
+        # skip the views in the initial window(which is also in the buffering set)
         if view_id in buffering_set_ids:
             # trick to mark the keyframe in the initial window
             if view_id // kf_stride == init_ref_id:
@@ -428,12 +423,13 @@ def recover_points_in_initial_window(num_views, buffering_set_ids,
             print(f"finish revocer pcd of frame {view_id} in their local coordinates(in buffer set), with a mean confidence of {per_frame_res['i2p_confs'][view_id].mean():.2f} up to now.")
             continue
         # construct the local window with the initial views
-        sel_ids = [view_id]
-        for j in range(1, win_r + 1):
-            if view_id - j * adj_distance >= 0:
-                sel_ids.append(view_id - j * adj_distance)
-            if view_id + j * adj_distance < num_views:
-                sel_ids.append(view_id + j * adj_distance)
+        # sel_ids = [view_id]
+        # for j in range(1, win_r + 1):
+        #     if view_id - j * adj_distance >= 0:
+        #         sel_ids.append(view_id - j * adj_distance)
+        #     if view_id + j * adj_distance < window_last_id:
+        #         sel_ids.append(view_id + j * adj_distance)
+        sel_ids = [view_id] + buffering_set_ids
         local_views = [input_views[id] for id in sel_ids]
         ref_id = 0
 
@@ -454,32 +450,32 @@ def recover_points_in_initial_window(num_views, buffering_set_ids,
     local_confs_mean_up2now = [conf.mean() for conf in per_frame_res['i2p_confs'] if conf is not None]
     return local_confs_mean_up2now, per_frame_res, input_views
 
-def recover_points_in_online_views(local_views, i2p_model, 
-                                   num_views, ref_id, 
-                                   per_frame_res, input_views, 
-                                   conf_thres_i2p, local_confs_mean_up2now):
+def pointmap_local_recon(local_views, i2p_model, 
+                            current_frame_id, ref_id, 
+                            per_frame_res, input_views, 
+                            conf_thres_i2p, local_confs_mean_up2now):
     output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id,
                                     tocpu=False, unsqueeze=False)['preds']
     # save results of the i2p model for the initial window
-    per_frame_res['i2p_pcds'][num_views] = output[ref_id]['pts3d'].cpu()
-    per_frame_res['i2p_confs'][num_views] = output[ref_id]['conf'][0].cpu()
+    per_frame_res['i2p_pcds'][current_frame_id] = output[ref_id]['pts3d'].cpu()
+    per_frame_res['i2p_confs'][current_frame_id] = output[ref_id]['conf'][0].cpu()
 
     # construct the input for L2W model
-    input_views[num_views]['pts3d_cam'] = output[ref_id]['pts3d']
+    input_views[current_frame_id]['pts3d_cam'] = output[ref_id]['pts3d']
     valid_mask = output[ref_id]['conf'] > conf_thres_i2p
-    input_views[num_views]['pts3d_cam'] = normalize_views([input_views[num_views]['pts3d_cam']],
+    input_views[current_frame_id]['pts3d_cam'] = normalize_views([input_views[current_frame_id]['pts3d_cam']],
                                                             [valid_mask])[0]
-    input_views[num_views]['pts3d_cam'][~valid_mask] = 0
+    input_views[current_frame_id]['pts3d_cam'][~valid_mask] = 0
 
-    local_confs_mean_up2now.append(per_frame_res['i2p_confs'][num_views].mean())
-    print(f"finish revocer pcd of frame {num_views} in their local coordinates")
+    local_confs_mean_up2now.append(per_frame_res['i2p_confs'][current_frame_id].mean())
+    print(f"finish revocer pcd of frame {current_frame_id} in their local coordinates")
     return local_confs_mean_up2now, per_frame_res, input_views, 
 
-def register_online_view(ref_views, input_views, l2w_model,
-                         args, max_id, per_frame_res, 
-                         registered_confs_mean, num_views, next_register_id):
-    
-    view_to_register = input_views[num_views]
+def pointmap_global_register(ref_views, input_views, l2w_model,
+                             args, per_frame_res, registered_confs_mean, 
+                             current_frame_id):
+
+    view_to_register = input_views[current_frame_id]
     l2w_input_views = ref_views + [view_to_register]
     
     output = l2w_inference(l2w_input_views, l2w_model,
@@ -487,21 +483,14 @@ def register_online_view(ref_views, input_views, l2w_model,
                             device=args.device,
                             normalize=args.norm_input)
     
-    # process the output of L2W model
-    src_ids_local = [id + len(ref_views) for id in range(max_id - next_register_id + 1)]
-    src_ids_global = [id for id in range(next_register_id, max_id + 1)]
+    conf_map = output[-1]['conf'] # 1,224,224
 
-    output_id = src_ids_local[0] # the id of the output in the output list
-    view_id = src_ids_global[0]    # the id of the view in all views
-    conf_map = output[output_id]['conf'] # 1,224,224
-
-    input_views[view_id]['pts3d_world'] = output[output_id]['pts3d_in_other_view'] # 1,224,224,3
-    per_frame_res['l2w_confs'][view_id] = conf_map[0]
-    registered_confs_mean[view_id] = conf_map[0].mean().cpu()
-    per_frame_res['l2w_pcds'][view_id] = input_views[view_id]['pts3d_world']
-    next_register_id += 1
+    input_views[current_frame_id]['pts3d_world'] = output[-1]['pts3d_in_other_view'] # 1,224,224,3
+    per_frame_res['l2w_confs'][current_frame_id] = conf_map[0]
+    registered_confs_mean[current_frame_id] = conf_map[0].mean().cpu()
+    per_frame_res['l2w_pcds'][current_frame_id] = input_views[current_frame_id]['pts3d_world']
     
-    return next_register_id, input_views, per_frame_res, registered_confs_mean
+    return input_views, per_frame_res, registered_confs_mean
 
 def update_buffer_set(next_register_id, max_buffer_size, 
                       kf_stride, buffering_set_ids, strategy, 
@@ -567,16 +556,16 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
     conf_thres_i2p = args.conf_thres_i2p
     num_points_save = args.num_points_save
     kf_stride = args.keyframe_stride
-
-    scene_id = "online_demo"
-    data_views = []
-    num_views = 0
-    rgb_imgs = []
-    input_views = []
-    res_shapes = []
-    res_feats = []
-    res_poses = []
     
+    update_buffer_intv = kf_stride*args.update_buffer_intv   # update the buffering set every update_buffer_intv frames
+    max_buffer_size = args.buffer_size
+    strategy = args.buffer_strategy    
+    
+    scene_id = "online_demo"
+    data_views = [] # store the processed views for reconstruction
+    rgb_imgs = []
+    input_views = [] # store the views with img tokens and predicted point clouds, which serve as input to i2p and l2w models
+
     local_confs_mean_up2now = []
     adj_distance = kf_stride
     fail_view = {}
@@ -586,36 +575,36 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
     assert initial_winsize >= 2, "not enough views for initializing the scene reconstruction"
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
     registered_confs_mean = []
-    num_views = -1
-    num_frame_pass = -1
+    num_frame_read = 0
+    num_frame_pass = 0
     
     while True:
         success, frame = frame_reader.read()
         if not success:
             break
         num_frame_pass += 1
-        
-        if num_frame_pass % args.perframe == 0:
-            num_views += 1
+
+        if (num_frame_pass - 1) % args.perframe == 0:
+            num_frame_read += 1
+            current_frame_id = num_frame_read - 1
             frame, data_views, rgb_imgs = get_raw_input_frame(
                                                 frame_reader.type, data_views, 
-                                                rgb_imgs, num_views, 
+                                                rgb_imgs, current_frame_id, 
                                                 frame, args)
-            res_shapes, res_feats,  res_poses, input_views,\
-            per_frame_res, registered_confs_mean = process_input_frame(
-                                res_shapes, res_feats, res_poses, input_views
-                                ,per_frame_res, registered_confs_mean, data_views, num_views
-                                ,i2p_model)
+            input_view, per_frame_res, registered_confs_mean =\
+                                process_input_frame(per_frame_res, registered_confs_mean, 
+                                                    data_views, current_frame_id, i2p_model)
+            input_views.append(input_view)
             
             # accumulate enough frames for scene initialization
-            if num_views < (initial_winsize - 1) * kf_stride:
+            if current_frame_id < (initial_winsize - 1) * kf_stride:
                 continue
             # it's time to initialize the scene
-            elif num_views == (initial_winsize - 1) * kf_stride:
+            elif current_frame_id == (initial_winsize - 1) * kf_stride:
                 initialSceneOutput = initial_scene_for_accumulated_frames(
-                    input_views, initial_winsize, kf_stride,
-                                                     i2p_model, per_frame_res, registered_confs_mean,
-                                                     args.buffer_size, conf_thres_i2p)
+                                        input_views, initial_winsize, kf_stride,
+                                        i2p_model, per_frame_res, registered_confs_mean,
+                                        args.buffer_size, conf_thres_i2p)
                 buffering_set_ids = initialSceneOutput[0]
                 init_ref_id = initialSceneOutput[1]
                 init_num = initialSceneOutput[2]
@@ -623,9 +612,8 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 per_frame_res = initialSceneOutput[4]
                 registered_confs_mean = initialSceneOutput[5]
                 
-                local_confs_mean_up2now, \
-                    per_frame_res, input_views\
-                        = recover_points_in_initial_window(num_views, buffering_set_ids, kf_stride,
+                local_confs_mean_up2now, per_frame_res, input_views =\
+                                recover_points_in_initial_window(current_frame_id, buffering_set_ids, kf_stride,
                                                  init_ref_id, per_frame_res, win_r,
                                                  adj_distance, input_views, i2p_model,
                                                  conf_thres_i2p)
@@ -650,46 +638,44 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                         registered_confs_mean[ii*kf_stride] = per_frame_res['l2w_confs'][ii*kf_stride].mean().cpu()
                 
                 # prepare for the next online reconstruction
-                next_register_id = (init_num - 1) * kf_stride + 1
                 milestone = init_num * kf_stride + 1
-                update_buffer_intv = kf_stride*args.update_buffer_intv   # update the buffering set every update_buffer_intv frames
-                max_buffer_size = args.buffer_size
-                strategy = args.buffer_strategy
                 candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
                 continue
             
-            sel_ids, ref_views, max_id, temp_sel_ids = select_ids_as_reference(buffering_set_ids, next_register_id, 
-                                                num_views, input_views, i2p_model, num_scene_frame, win_r,
+            sel_ids, ref_views, max_id, temp_sel_ids = select_ids_as_reference(buffering_set_ids, current_frame_id, 
+                                                current_frame_id, input_views, i2p_model, num_scene_frame, win_r,
                                                 adj_distance, temp_sel_ids, ref_views)
 
             local_views = [input_views[id] for id in sel_ids]
             ref_id = 0
             
-            local_confs_mean_up2now, per_frame_res, input_views\
-                = recover_points_in_online_views(local_views, i2p_model, num_views, ref_id, per_frame_res,
+            local_confs_mean_up2now, per_frame_res, input_views = \
+                pointmap_local_recon(local_views, i2p_model, current_frame_id, ref_id, per_frame_res,
                                            input_views, conf_thres_i2p, local_confs_mean_up2now)
 
                 
-            next_register_id, input_views, per_frame_res, registered_confs_mean \
-                    = register_online_view(ref_views, input_views, l2w_model, args,
-                                max_id, per_frame_res, registered_confs_mean, num_views, next_register_id)
-
-            if next_register_id - milestone >= update_buffer_intv:
+            input_views, per_frame_res, registered_confs_mean = \
+                        pointmap_global_register(ref_views, input_views, l2w_model, args,
+                                max_id, per_frame_res, registered_confs_mean, 
+                                current_frame_id)
+            
+            next_frame_id = current_frame_id + 1
+            if next_frame_id - milestone >= update_buffer_intv:
                 milestone, candi_frame_id, buffering_set_ids = update_buffer_set(
-                                                next_register_id, update_buffer_intv, 
+                                                next_frame_id, update_buffer_intv, 
                                                 max_buffer_size, kf_stride, buffering_set_ids, 
                                                 strategy, registered_confs_mean, local_confs_mean_up2now, 
                                                 candi_frame_id, milestone)
             
-            conf = registered_confs_mean[num_views]
+            conf = registered_confs_mean[current_frame_id]
             if conf < 10:
-                fail_view[num_views] = conf.item()
+                fail_view[current_frame_id] = conf.item()
             print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
             print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
             
     print(frame_reader.count)
 
-    save_recon(input_views, num_views + 1, save_dir, scene_id, 
+    save_recon(input_views, num_frame_read, save_dir, scene_id, 
                       args.save_all_views, rgb_imgs, registered_confs=per_frame_res['l2w_confs'], 
                       num_points_save=num_points_save, 
                       conf_thres_res=conf_thres_l2w)
