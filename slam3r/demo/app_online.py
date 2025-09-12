@@ -146,7 +146,7 @@ def recon_scene(i2p_model:Image2PointsModel,
     registered_confs_mean = []
     fail_view = {}
     data_views = []
-    frame_num = -1
+    num_frame_pass = -1
     num_views = -1
 
 
@@ -154,17 +154,17 @@ def recon_scene(i2p_model:Image2PointsModel,
         success, frame = dataset.read()
         if not success:
             break
-        frame_num += 1
+        num_frame_pass += 1
         
-        if frame_num % fps == 0: 
+        if num_frame_pass % fps == 0: 
             num_views += 1   
-            frame_num, num_views, frame, data_views, rgb_imgs\
-                = get_image_input(dataset, data_views, rgb_imgs,
-                                      frame_num, num_views, frame, args)
+            num_views, frame, data_views, rgb_imgs\
+                = get_raw_input_frame(dataset, data_views, rgb_imgs,
+                                      num_views, frame, args)
             
             res_shapes, res_feats,  res_poses, input_views,\
             per_frame_res, registered_confs_mean = \
-                process_single_frame_input(res_shapes, res_feats, res_poses, input_views
+                process_input_frame(res_shapes, res_feats, res_poses, input_views
                                 ,per_frame_res, registered_confs_mean, data_views, num_views
                                 ,i2p_model)
             # accumulate the initial window frames
@@ -174,7 +174,7 @@ def recon_scene(i2p_model:Image2PointsModel,
                 initialSceneOutput = initial_scene_for_accumulated_frames(\
                     input_views, initial_winsize, keyframe_stride,
                                                      i2p_model, per_frame_res, registered_confs_mean,
-                                                     args, conf_thres_i2p)
+                                                     args.buffer_size, conf_thres_i2p)
                 buffering_set_ids = initialSceneOutput[0]
                 init_ref_id = initialSceneOutput[1]
                 init_num = initialSceneOutput[2]
@@ -244,8 +244,9 @@ def recon_scene(i2p_model:Image2PointsModel,
                     = register_online_view(ref_views, input_views, l2w_model, args,
                                  max_id, ni, per_frame_res, registered_confs_mean, num_views, next_register_id)
             
-            milestone, candi_frame_id, \
-                buffering_set_ids = update_buffer_set(next_register_id, update_buffer_intv, max_buffer_size, keyframe_stride,
+            if next_register_id - milestone >= update_buffer_intv:
+                milestone, candi_frame_id, \
+                buffering_set_ids = update_buffer_set(next_register_id, max_buffer_size, keyframe_stride,
                               buffering_set_ids, strategy, registered_confs_mean, local_confs_mean_up2now, candi_frame_id, milestone)
             
             conf = registered_confs_mean[num_views]
