@@ -21,38 +21,6 @@ from slam3r.recon_online_pipeline import *
 
 point_cloud_queue = Queue()
 
-@torch.no_grad()
-def get_single_img_tokens(views, model, silent=False):
-    """get an img token output from encoder,
-    which can be reused by both i2p and l2w models
-    """
-    
-    # Check if the input is a list containing a single view dictionary
-    assert isinstance(views, list) and len(views) == 1
-    
-    view = views[0]
-    image = view['img']
-    true_shape = view['true_shape']
-    res_feat, pos, _ = model._encode_image(image, true_shape, normalize=False)
-    res_shape = [view['true_shape']]
-    res_feat = [res_feat]
-    res_poses = [pos] 
-
-    return res_shape, res_feat, res_poses
-
-
-def extract_frames(video_path: str, fps: float) -> str:
-    temp_dir = tempfile.mkdtemp()
-    output_path = os.path.join(temp_dir, "%03d.jpg")
-    command = [
-        "ffmpeg",
-        "-i", video_path,
-        "-vf", f"fps={fps}",
-        output_path
-    ]
-    subprocess.run(command, check=True)
-    return temp_dir
-
 class FrameReader:
     def __init__(self, dataset):
         # detect the type of the input data
@@ -102,7 +70,7 @@ def recon_scene(i2p_model:Image2PointsModel,
                 img_dir_or_list, 
                 keyframe_stride, win_r, initial_winsize, conf_thres_i2p,
                 num_scene_frame, update_buffer_intv, buffer_strategy, buffer_size,
-                conf_thres_l2w, num_points_save):
+                conf_thres_l2w, num_points_save, retrieve_freq):
     # print(f"device: {device},\n save_dir: {save_dir},\n fps: {fps},\n keyframe_stride: {keyframe_stride},\n win_r: {win_r},\n initial_winsize: {initial_winsize},\n conf_thres_i2p: {conf_thres_i2p},\n num_scene_frame: {num_scene_frame},\n update_buffer_intv: {update_buffer_intv},\n buffer_strategy: {buffer_strategy},\n buffer_size: {buffer_size},\n conf_thres_l2w: {conf_thres_l2w},\n num_points_save: {num_points_save}")
     np.random.seed(42)
     args = argparse.ArgumentParser()
@@ -120,9 +88,11 @@ def recon_scene(i2p_model:Image2PointsModel,
     args.conf_thres_l2w = conf_thres_l2w
     args.num_points_save = num_points_save
     args.norm_input = None
-
     
-    num_views = 0
+    
+    max_buffer_size = buffer_size
+    strategy = buffer_strategy
+    # num_views = 0
     adj_distance = keyframe_stride
     source = ""
     
@@ -130,25 +100,20 @@ def recon_scene(i2p_model:Image2PointsModel,
         source = video_url.value
     else:
         source = img_dir_or_list
-    
-    
     dataset = FrameReader(source)
-    input_views = []
+    data_views = [] # store the processed views for reconstruction
+    input_views = [] # store the views with img tokens and predicted point clouds, which serve as input to i2p and l2w models
     rgb_imgs = []
-    res_shapes = []
-    res_feats = []
-    res_poses = []
-    temp_sel_ids = []
-    ref_views = []
+
+    local_confs_mean_up2now = []
+    fail_view = {}
+    last_ref_ids_buffer = []
     
     assert initial_winsize >= 2, "not enough views for initializing the scene reconstruction"
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[], rgb_imgs=[])
     registered_confs_mean = []
-    fail_view = {}
-    data_views = []
-    num_frame_pass = -1
-    num_views = -1
-
+    num_frame_pass = 0
+    num_frame_read = 0
 
     while True:
         success, frame = dataset.read()
@@ -156,27 +121,27 @@ def recon_scene(i2p_model:Image2PointsModel,
             break
         num_frame_pass += 1
         
-        if num_frame_pass % fps == 0: 
-            num_views += 1   
-            frame, data_views, rgb_imgs\
-                = get_raw_input_frame(dataset, data_views, rgb_imgs,
-                                      num_views, frame, args)
+        if (num_frame_pass - 1) % fps == 0: 
+            num_frame_read += 1   
+            current_frame_id = num_frame_read - 1
+            frame, data_views, rgb_imgs = get_raw_input_frame(
+                                    dataset.type, data_views, 
+                                    rgb_imgs,current_frame_id, 
+                                    frame, args)
             
-            res_shapes, res_feats, res_poses, input_view, per_frame_res, registered_confs_mean =\
-                                process_input_frame(
-                                    res_shapes, res_feats, res_poses,
+            input_view, per_frame_res, registered_confs_mean = process_input_frame(
                                     per_frame_res, registered_confs_mean, 
-                                    data_views, num_views, i2p_model)
+                                    data_views, current_frame_id, i2p_model)
             input_views.append(input_view)
             
             # accumulate the initial window frames
-            if num_views < (initial_winsize - 1)*keyframe_stride:
+            if current_frame_id < (initial_winsize - 1)*keyframe_stride:
                 continue
-            elif num_views == (initial_winsize - 1)*keyframe_stride:
-                initialSceneOutput = initial_scene_for_accumulated_frames(\
-                    input_views, initial_winsize, keyframe_stride,
-                                                     i2p_model, per_frame_res, registered_confs_mean,
-                                                     args.buffer_size, conf_thres_i2p)
+            elif current_frame_id == (initial_winsize - 1)*keyframe_stride:
+                initialSceneOutput = initial_scene_for_accumulated_frames(
+                                        input_views, initial_winsize, keyframe_stride,
+                                        i2p_model, per_frame_res, registered_confs_mean,
+                                        args.buffer_size, conf_thres_i2p)
                 buffering_set_ids = initialSceneOutput[0]
                 init_ref_id = initialSceneOutput[1]
                 init_num = initialSceneOutput[2]
@@ -184,19 +149,18 @@ def recon_scene(i2p_model:Image2PointsModel,
                 per_frame_res = initialSceneOutput[4]
                 registered_confs_mean = initialSceneOutput[5]
                 
-                local_confs_mean_up2now, \
-                    per_frame_res, input_views\
-                        = recover_points_in_initial_window(num_views, buffering_set_ids, keyframe_stride,
-                                                 init_ref_id, per_frame_res, win_r,
-                                                 adj_distance, input_views, i2p_model,
-                                                 conf_thres_i2p)
+                local_confs_mean_up2now, per_frame_res, input_views =\
+                            recover_points_in_initial_window(
+                                                current_frame_id, buffering_set_ids, keyframe_stride,
+                                                init_ref_id, per_frame_res,
+                                                input_views, i2p_model, conf_thres_i2p)
                         
                 # Special treatment: register the frames within the range of initial window with L2W model
                 if keyframe_stride > 1:
-                    max_conf_mean, input_views, \
-                        per_frame_res = register_initial_window_frames(init_num, keyframe_stride, buffering_set_ids,
-                                                   input_views, l2w_model, args, per_frame_res, registered_confs_mean)
-                    print(f'finish aligning {(init_num)*keyframe_stride} head frames, with a max mean confidence of {max_conf_mean:.2f}')
+                    max_conf_mean, input_views, per_frame_res = \
+                        register_initial_window_frames(init_num, keyframe_stride, buffering_set_ids,
+                                                        input_views, l2w_model, args, per_frame_res, 
+                                                        registered_confs_mean)
                     # A problem is that the registered_confs_mean of the initial window is generated by I2P model,
                     # while the registered_confs_mean of the frames within the initial window is generated by L2W model,
                     # so there exists a gap. Here we try to align it.
@@ -204,56 +168,51 @@ def recon_scene(i2p_model:Image2PointsModel,
                     for ii in range(init_num):
                         if registered_confs_mean[ii*keyframe_stride] > max_initial_conf_mean:
                             max_initial_conf_mean = registered_confs_mean[ii*keyframe_stride]
-                    factor = max_conf_mean/max_initial_conf_mean
+                    factor = max_conf_mean / max_initial_conf_mean
                     # print(f'align register confidence with a factor {factor}')
                     for ii in range(init_num):
                         per_frame_res['l2w_confs'][ii*keyframe_stride] *= factor
                         registered_confs_mean[ii*keyframe_stride] = per_frame_res['l2w_confs'][ii*keyframe_stride].mean().cpu()
                         
-                # # prepare for the next online reconstruction
-                next_register_id = (init_num - 1) * keyframe_stride + 1
+                # prepare for the next online reconstruction
                 milestone = init_num * keyframe_stride + 1
-                update_buffer_intv = keyframe_stride*update_buffer_intv   # update the buffering set every update_buffer_intv frames
-                max_buffer_size = buffer_size
-                strategy = buffer_strategy
                 candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
-                point_cloud_queue.put((per_frame_res["l2w_pcds"][num_views][0], rgb_imgs[num_views], per_frame_res['l2w_confs'][num_views]))   
+                point_cloud_queue.put((per_frame_res["l2w_pcds"][current_frame_id][0], rgb_imgs[current_frame_id], per_frame_res['l2w_confs'][current_frame_id]))   
                 continue
 
-            # after the initial window
-            # select the reference views for the current view
-            sel_ids, ref_views, max_id, temp_sel_ids = select_ids_as_reference(buffering_set_ids, next_register_id, 
-                                                num_views, input_views, i2p_model, num_scene_frame, win_r,
-                                                adj_distance, temp_sel_ids, ref_views)
+            ref_ids, ref_ids_buffer = select_ids_as_reference(buffering_set_ids, current_frame_id,
+                                                    input_views, i2p_model, num_scene_frame, win_r,
+                                                    adj_distance, retrieve_freq, last_ref_ids_buffer)
             
-            local_views = [input_views[id] for id in sel_ids]
-            ref_id = 0
+            last_ref_ids_buffer = ref_ids_buffer
+            local_views = [input_views[current_frame_id]] + [input_views[id] for id in ref_ids]
 
-            local_confs_mean_up2now, per_frame_res, input_views\
-                = pointmap_local_recon(local_views, i2p_model, num_views, ref_id, per_frame_res,
+            local_confs_mean_up2now, per_frame_res, input_views = \
+                pointmap_local_recon(local_views, i2p_model, current_frame_id, 0, per_frame_res,
                                            input_views, conf_thres_i2p, local_confs_mean_up2now)
                 
-            next_register_id, input_views, \
-                per_frame_res, registered_confs_mean \
-                    = pointmap_global_register(ref_views, input_views, l2w_model, args,
-                                 max_id, per_frame_res, registered_confs_mean, num_views, next_register_id)
+            ref_views = [input_views[id] for id in ref_ids]
+            input_views, per_frame_res, registered_confs_mean = pointmap_global_register(
+                                ref_views, input_views, l2w_model, args,
+                                per_frame_res, registered_confs_mean, current_frame_id)
+
+            next_frame_id = current_frame_id + 1
+            if next_frame_id - milestone >= update_buffer_intv:
+                milestone, candi_frame_id, buffering_set_ids = update_buffer_set(
+                                        next_frame_id, max_buffer_size, 
+                                        keyframe_stride, buffering_set_ids, strategy, 
+                                        registered_confs_mean, local_confs_mean_up2now, 
+                                        candi_frame_id, milestone)
             
-            if next_register_id - milestone >= update_buffer_intv:
-                milestone, candi_frame_id, \
-                buffering_set_ids = update_buffer_set(next_register_id, max_buffer_size, keyframe_stride,
-                              buffering_set_ids, strategy, registered_confs_mean, local_confs_mean_up2now, candi_frame_id, milestone)
-            
-            conf = registered_confs_mean[num_views]
+            conf = registered_confs_mean[current_frame_id]
             if conf < 10:
-                fail_view[num_views] = conf.item()
-            print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
-            print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
-            
-            
+                fail_view[current_frame_id] = conf.item()
+            print(f"finish recover pcd of frame {current_frame_id}, with a mean confidence of {conf:.2f}.")
+            point_cloud_queue.put((per_frame_res["l2w_pcds"][current_frame_id][0], rgb_imgs[current_frame_id], per_frame_res['l2w_confs'][current_frame_id]))
 
-            point_cloud_queue.put((per_frame_res["l2w_pcds"][num_views][0], rgb_imgs[num_views], per_frame_res['l2w_confs'][num_views]))
-
-
+    print(f"finish reconstructing {num_frame_read} frames")
+    print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
+    print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
     per_frame_res['rgb_imgs'] = rgb_imgs
     save_path = get_model_from_scene(per_frame_res=per_frame_res, 
                                      save_dir=save_dir, 
@@ -290,8 +249,6 @@ def print_model_viser():
                 break
 
             new_frame_points_data, new_frame_colors_data, new_frame_confs_data = new_data
-            
-            # --- 数据处理部分不变 ---
             if isinstance(new_frame_points_data, torch.Tensor):
                 new_frame_points = new_frame_points_data.cpu().numpy()
             else:
@@ -428,32 +385,27 @@ def display_inputs(images):
             gradio.update(value=None, visible=False, scale=2, height=300,)]
 
 def change_inputfile_type(input_type):
-    # 为所有可能的输入组件和video_extract_fps准备更新对象
     update_file = gradio.update(visible=False)
     update_webcam = gradio.update(visible=False)
     update_external_webcam_html = gradio.update(visible=False)
-    update_video_fps = gradio.update(visible=False, value=1, scale=0) # 默认值和隐藏
+    update_video_fps = gradio.update(visible=False, value=1, scale=0) 
     update_url = gradio.update(visible=False)
 
     if input_type == "directory":
         update_file = gradio.update(file_count="directory", file_types=["image"],
-                                 label="Select a directory containing images", visible=True, value=None) # value=None清除之前的文件
+                                 label="Select a directory containing images", visible=True, value=None) 
     elif input_type == "images":
         update_file = gradio.update(file_count="multiple", file_types=["image"],
                                  label="Upload multiple images", visible=True, value=None)
     elif input_type == "video":
         update_file = gradio.update(file_count="single", file_types=["video"],
                                  label="Upload a mp4 video", visible=True, value=None)
-        update_video_fps = gradio.update(interactive=True, scale=1, visible=True, value=5) # 显式设置值
+        update_video_fps = gradio.update(interactive=True, scale=1, visible=True, value=5) 
     elif input_type == "webcamera":
-        # 如果你希望直接使用Gradio的内置摄像头
-        #update_webcam = gradio.update(visible=True)
-        # 如果你坚持嵌入外部网页，则显示HTML组件
         update_external_webcam_html = gradio.update(visible=True)
         update_url = gradio.update(visible=True)
         update_video_fps = gradio.update(interactive=True, scale = 1, visible=True, value = 5)
 
-    # 这里的返回顺序必须与main_demo中outputs的顺序一致
     return update_file, update_webcam, update_external_webcam_html, update_video_fps, update_url,update_url,update_url,update_url
     
 def change_kf_stride_type(kf_stride, inputfiles, win_r):
@@ -528,9 +480,7 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                                   scale=2,
                                                   height=200,
                                                   label="Webcam Input",
-                                                  visible=False) # 默认隐藏
-                
-                
+                                                  visible=False) 
                 
                 inputfiles_external_webcam_html = gradio.HTML(""
                 )
@@ -573,6 +523,11 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                       interactive=True, 
                                       label="the number of scene frames for reference",
                                       info="For L2W reconstruction!")
+                retrieve_freq = gradio.Number(value=5, precision=0, minimum=1,
+                                              interactive=True,
+                                              visible=True,
+                                              label="retrieve frequency",
+                                              info="For L2W reconstruction!")
                 buffer_strategy = gradio.Dropdown(["reservoir", "fifo","unbounded"], 
                                            value='reservoir', interactive=True,  
                                            label="strategy for buffer management",
@@ -624,7 +579,7 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                   input_type, auth_url,
                                   inputfiles, kf_stride_fix, win_r, initial_winsize, conf_thres_i2p,
                                   num_scene_frame, update_buffer_intv, buffer_strategy, buffer_size,
-                                  conf_thres_l2w, num_points_save],
+                                  conf_thres_l2w, num_points_save, retrieve_freq],
                           outputs=[outmodel, per_frame_res])
             conf_thres_l2w.release(fn=get_model_from_scene,
                                  inputs=[per_frame_res, tmpdir_name, num_points_save, conf_thres_l2w],
@@ -639,10 +594,8 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
     demo.launch(share=False, server_name=server_name, server_port=server_port,debug=True)
 
 def change_web_camera_url(inputs_external_webcam, web_url, web_cam_account, web_cam_password, auth_url):
-    # 将 URL 分割成协议和其余部分
     protocol, rest_of_url = web_url.split("://")
 
-    # 构造新的 URL
     auth_url = gradio.State(f"{protocol}://{web_cam_account}:{web_cam_password}@{rest_of_url}")
     
 

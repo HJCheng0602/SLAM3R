@@ -551,7 +551,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                     for ii in range(init_num):
                         if registered_confs_mean[ii*kf_stride] > max_initial_conf_mean:
                             max_initial_conf_mean = registered_confs_mean[ii*kf_stride]
-                    factor = max_conf_mean/max_initial_conf_mean
+                    factor = max_conf_mean / max_initial_conf_mean
                     # print(f'align register confidence with a factor {factor}')
                     for ii in range(init_num):
                         per_frame_res['l2w_confs'][ii*kf_stride] *= factor
@@ -588,7 +588,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
             conf = registered_confs_mean[current_frame_id]
             if conf < 10:
                 fail_view[current_frame_id] = conf.item()
-            print(f"finish revocer pcd of frame {current_frame_id}, with a mean confidence of {conf:.2f}.")
+            print(f"finish recover pcd of frame {current_frame_id}, with a mean confidence of {conf:.2f}.")
             
     print(f"finish reconstructing {num_frame_read} frames")
     print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
