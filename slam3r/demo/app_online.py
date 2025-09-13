@@ -5,62 +5,18 @@ import torch
 import numpy as np
 import tempfile
 import functools
-import subprocess
 import threading
 from queue import Queue,Empty
 import viser
 
-from slam3r.recon_online_pipeline import get_img_tokens, initialize_scene, i2p_inference_batch, l2w_inference, normalize_views, scene_frame_retrieve
-from slam3r.datasets.wild_seq import Seq_Data
+from slam3r.recon_online_pipeline import FrameReader
 from slam3r.models import Local2WorldModel, Image2PointsModel
 from slam3r.utils.device import to_numpy
 from slam3r.utils.recon_utils import *
 from slam3r.datasets.get_webvideo import *
-from slam3r.utils.image import load_single_image
 from slam3r.recon_online_pipeline import *
 
 point_cloud_queue = Queue()
-
-class FrameReader:
-    def __init__(self, dataset):
-        # detect the type of the input data
-        self.dataset = dataset
-        self.type = ""
-        self.readnum = 0
-        
-        if isinstance(dataset, list):
-            self.type = "imgs"
-        elif dataset.startswith("http") or dataset.startswith("https"):
-            self.type = "https"
-        elif dataset.endswith(".mp4") or dataset.endswith(".avi") or dataset.endswith(".mov"):
-            self.type = "video"
-        if self.type == "imgs":
-            print('loading dataset: ', self.dataset)
-            self.data = Seq_Data(img_dir=self.dataset, \
-                                    img_size=224, silent=False, sample_freq=1, \
-                                    start_idx=0, num_views=-1, start_freq=1, to_tensor=True)
-            if hasattr(self.data, "set_epoch"):
-                self.data.set_epoch(0)
-        elif self.type == "video":
-            self.video_capture = cv2.VideoCapture(self.dataset)
-            if not self.video_capture.isOpened():
-                print(f"error!can not open the video file{self.dataset}")
-                exit()
-            print("successful opened! start processing frame by frame...")
-        elif self.type == "https":
-            self.get_api = Get_online_video(self.dataset)
-    def read(self):
-        if self.type == "https":
-            return self.get_api.cap.read()
-        elif self.type == "video":
-            return self.video_capture.read()
-        elif self.type == "imgs":
-            print(f"reading the {self.readnum}th image")
-            self.readnum += 1
-
-            if self.readnum >= len(self.data[0]):
-                return False, None
-            return True, self.data[0][self.readnum]
 
 def recon_scene(i2p_model:Image2PointsModel, 
                 l2w_model:Local2WorldModel, 
@@ -89,13 +45,11 @@ def recon_scene(i2p_model:Image2PointsModel,
     args.num_points_save = num_points_save
     args.norm_input = None
     
-    
     max_buffer_size = buffer_size
     strategy = buffer_strategy
     # num_views = 0
     adj_distance = keyframe_stride
     source = ""
-    
     if files_type == "webcamera":
         source = video_url.value
     else:
@@ -104,11 +58,9 @@ def recon_scene(i2p_model:Image2PointsModel,
     data_views = [] # store the processed views for reconstruction
     input_views = [] # store the views with img tokens and predicted point clouds, which serve as input to i2p and l2w models
     rgb_imgs = []
-
     local_confs_mean_up2now = []
     fail_view = {}
     last_ref_ids_buffer = []
-    
     assert initial_winsize >= 2, "not enough views for initializing the scene reconstruction"
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[], rgb_imgs=[])
     registered_confs_mean = []
@@ -119,8 +71,7 @@ def recon_scene(i2p_model:Image2PointsModel,
         success, frame = dataset.read()
         if not success:
             break
-        num_frame_pass += 1
-        
+        num_frame_pass += 1   
         if (num_frame_pass - 1) % fps == 0: 
             num_frame_read += 1   
             current_frame_id = num_frame_read - 1
@@ -138,16 +89,16 @@ def recon_scene(i2p_model:Image2PointsModel,
             if current_frame_id < (initial_winsize - 1)*keyframe_stride:
                 continue
             elif current_frame_id == (initial_winsize - 1)*keyframe_stride:
-                initialSceneOutput = initial_scene_for_accumulated_frames(
+                InitialSceneOutput = initial_scene_for_accumulated_frames(
                                         input_views, initial_winsize, keyframe_stride,
                                         i2p_model, per_frame_res, registered_confs_mean,
                                         args.buffer_size, conf_thres_i2p)
-                buffering_set_ids = initialSceneOutput[0]
-                init_ref_id = initialSceneOutput[1]
-                init_num = initialSceneOutput[2]
-                input_views = initialSceneOutput[3]
-                per_frame_res = initialSceneOutput[4]
-                registered_confs_mean = initialSceneOutput[5]
+                buffering_set_ids = InitialSceneOutput[0]
+                init_ref_id = InitialSceneOutput[1]
+                init_num = InitialSceneOutput[2]
+                input_views = InitialSceneOutput[3]
+                per_frame_res = InitialSceneOutput[4]
+                registered_confs_mean = InitialSceneOutput[5]
                 
                 local_confs_mean_up2now, per_frame_res, input_views =\
                             recover_points_in_initial_window(
@@ -172,12 +123,14 @@ def recon_scene(i2p_model:Image2PointsModel,
                     # print(f'align register confidence with a factor {factor}')
                     for ii in range(init_num):
                         per_frame_res['l2w_confs'][ii*keyframe_stride] *= factor
-                        registered_confs_mean[ii*keyframe_stride] = per_frame_res['l2w_confs'][ii*keyframe_stride].mean().cpu()
+                        registered_confs_mean[ii*keyframe_stride] = \
+                            per_frame_res['l2w_confs'][ii*keyframe_stride].mean().cpu()
                         
                 # prepare for the next online reconstruction
                 milestone = init_num * keyframe_stride + 1
                 candi_frame_id = len(buffering_set_ids) # used for the reservoir sampling strategy
-                point_cloud_queue.put((per_frame_res["l2w_pcds"][current_frame_id][0], rgb_imgs[current_frame_id], per_frame_res['l2w_confs'][current_frame_id]))   
+                point_cloud_queue.put((per_frame_res["l2w_pcds"][current_frame_id][0], \
+                    rgb_imgs[current_frame_id], per_frame_res['l2w_confs'][current_frame_id]))   
                 continue
 
             ref_ids, ref_ids_buffer = select_ids_as_reference(buffering_set_ids, current_frame_id,
@@ -208,24 +161,27 @@ def recon_scene(i2p_model:Image2PointsModel,
             if conf < 10:
                 fail_view[current_frame_id] = conf.item()
             print(f"finish recover pcd of frame {current_frame_id}, with a mean confidence of {conf:.2f}.")
-            point_cloud_queue.put((per_frame_res["l2w_pcds"][current_frame_id][0], rgb_imgs[current_frame_id], per_frame_res['l2w_confs'][current_frame_id]))
+            point_cloud_queue.put((per_frame_res["l2w_pcds"][current_frame_id][0], 
+                                   rgb_imgs[current_frame_id], 
+                                   per_frame_res['l2w_confs'][current_frame_id]))
 
     print(f"finish reconstructing {num_frame_read} frames")
-    print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
-    print(f"{len(fail_view)} views with low confidence: ", {key:round(fail_view[key],2) for key in fail_view.keys()})
+    print(f'mean confidence for whole scene reconstruction: \
+          {torch.tensor(registered_confs_mean).mean().item():.2f}')
+    
+    print(f"{len(fail_view)} views with low confidence: ", 
+          {key:round(fail_view[key],2) for key in fail_view.keys()})
+     
     per_frame_res['rgb_imgs'] = rgb_imgs
     save_path = get_model_from_scene(per_frame_res=per_frame_res, 
                                      save_dir=save_dir, 
                                      num_points_save=num_points_save, 
                                      conf_thres_res=conf_thres_l2w)
     point_cloud_queue.put(None)
-
     return save_path, per_frame_res
 
 def print_model_viser():
     server = viser.ViserServer()
-
-
     points_buffer = np.zeros((0, 3), dtype=np.float32)
     colors_buffer = np.zeros((0, 3), dtype=np.uint8)
 
@@ -235,7 +191,6 @@ def print_model_viser():
         colors=colors_buffer,
         point_size=0.001
     )
-
 
     conf_thres_res = 12
     num_points_per_frame = 10000
@@ -253,12 +208,10 @@ def print_model_viser():
                 new_frame_points = new_frame_points_data.cpu().numpy()
             else:
                 new_frame_points = new_frame_points_data
-
             if isinstance(new_frame_colors_data, torch.Tensor):
                 new_frame_colors = new_frame_colors_data.cpu().numpy().astype(np.uint8)
             else:
                 new_frame_colors = new_frame_colors_data.astype(np.uint8)
-            
             if isinstance(new_frame_confs_data, torch.Tensor):
                 new_frame_confs = new_frame_confs_data.cpu().numpy()
             else:
@@ -273,29 +226,25 @@ def print_model_viser():
             filtered_colors = flattened_colors[conf_mask]
             
             n_points_in_frame = len(filtered_points)
-            
-            
             n_samples = min(num_points_per_frame, n_points_in_frame)
             
             if n_samples > 0:
                 sampled_idx = np.random.choice(n_points_in_frame, n_samples, replace=False)
                 sampled_pts = filtered_points[sampled_idx]
                 sampled_colors = filtered_colors[sampled_idx]
-
                 points_buffer = np.concatenate((points_buffer, sampled_pts), axis=0)
                 colors_buffer = np.concatenate((colors_buffer, sampled_colors), axis=0)
-
 
                 point_cloud_handle.points = points_buffer
                 point_cloud_handle.colors = colors_buffer
             
-                print(f"consumer: point cloud updated with {n_samples} new points, total {len(points_buffer)} points now.")
+                print(f"consumer: point cloud updated with {n_samples} new points,\
+                    total {len(points_buffer)} points now.")
             else:
                 print("consumer: no points passed the confidence threshold in this frame.")
 
         except Empty:
             pass
-        
         except Exception as e:
             print(f"consumer: encountered an error: {e}")
             break
@@ -368,20 +317,24 @@ def display_inputs(images):
     img_label = "Click or use the left/right arrow keys to browse images", 
 
     if images is None or len(images) == 0: 
-        return [gradio.update(label=img_label, value=None, visible=False, selected_index=0, scale=2, preview=True, height=300,),
+        return [gradio.update(label=img_label, value=None, visible=False, 
+                              selected_index=0, scale=2, preview=True, height=300,),
                 gradio.update(value=None, visible=False, scale=2, height=300,)]  
 
     if isinstance(images, str): 
         file_path = images
         video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'}
         if any(file_path.endswith(ext) for ext in video_extensions):
-            return [gradio.update(label=img_label, value=None, visible=False, selected_index=0, scale=2, preview=True, height=300,),
+            return [gradio.update(label=img_label, value=None, visible=False,
+                                  selected_index=0, scale=2, preview=True, height=300,),
                 gradio.update(value=file_path, autoplay=True, visible=True, scale=2, height=300,)]
         else:
-            return [gradio.update(label=img_label, value=None, visible=False, selected_index=0, scale=2, preview=True, height=300,),
+            return [gradio.update(label=img_label, value=None, visible=False, 
+                                  selected_index=0, scale=2, preview=True, height=300,),
                     gradio.update(value=None, visible=False, scale=2, height=300,)] 
             
-    return [gradio.update(label=img_label, value=images, visible=True, selected_index=0, scale=2, preview=True, height=300,),
+    return [gradio.update(label=img_label, value=images, visible=True, 
+                          selected_index=0, scale=2, preview=True, height=300,),
             gradio.update(value=None, visible=False, scale=2, height=300,)]
 
 def change_inputfile_type(input_type):
@@ -406,9 +359,10 @@ def change_inputfile_type(input_type):
         update_url = gradio.update(visible=True)
         update_video_fps = gradio.update(interactive=True, scale = 1, visible=True, value = 5)
 
-    return update_file, update_webcam, update_external_webcam_html, update_video_fps, update_url,update_url,update_url,update_url
+    return update_file, update_webcam, update_external_webcam_html,\
+            update_video_fps, update_url,update_url,update_url,update_url
     
-def change_kf_stride_type(kf_stride, inputfiles, win_r):
+def change_kf_stride_type(kf_stride):
     max_kf_stride = 10
     if kf_stride == "auto":
         kf_stride_fix = gradio.Slider(value=-1,minimum=-1, maximum=-1, step=1, 
@@ -470,8 +424,6 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                                           visible= False, interactive=True)
                     confirm_button = gradio.Button("apply", visible= False, interactive=True)
                     
-                    
-                
                 inputfiles = gradio.File(file_count="directory", file_types=["image"],
                                          scale=2,
                                          height=200,
@@ -496,7 +448,6 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                             height=300,
                                             scale=2)
                 
-
             with gradio.Row():
                 kf_stride = gradio.Dropdown(["manual setting"], label="how to choose stride between keyframes",
                                            value="manual setting", interactive=True,  
@@ -567,9 +518,11 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                 outputs=[image_gallery, video_gallery])
             input_type.change(change_inputfile_type,
                                 inputs=[input_type],
-                                outputs=[inputfiles, inputfiles_webcam, inputfiles_external_webcam_html, video_extract_fps,input_url_web_cam, confirm_button, web_cam_account, web_cam_password])
+                                outputs=[inputfiles, inputfiles_webcam, inputfiles_external_webcam_html, 
+                                         video_extract_fps,input_url_web_cam, 
+                                         confirm_button, web_cam_account, web_cam_password])
             kf_stride.change(change_kf_stride_type,
-                                inputs=[kf_stride, inputfiles, win_r],
+                                inputs=[kf_stride],
                                 outputs=[kf_stride_fix])
             buffer_strategy.change(change_buffer_strategy,
                                 inputs=[buffer_strategy],
@@ -588,7 +541,8 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                             inputs=[per_frame_res, tmpdir_name, num_points_save, conf_thres_l2w],
                             outputs=outmodel)
             confirm_button.click(fn=change_web_camera_url,
-                                 inputs=[inputfiles_external_webcam_html, input_url_web_cam, web_cam_account, web_cam_password,auth_url],
+                                 inputs=[inputfiles_external_webcam_html, input_url_web_cam, 
+                                         web_cam_account, web_cam_password,auth_url],
                                  outputs=[inputfiles_external_webcam_html, auth_url])
 
     demo.launch(share=False, server_name=server_name, server_port=server_port,debug=True)
