@@ -61,7 +61,8 @@ parser.add_argument("--save_frequency", type=int,default=3,
 parser.add_argument("--save_each_frame",action='store_true',default=True,
                     help="whether to save each frame to .ply")
 parser.add_argument("--video_path",type = str)
-
+parser.add_argument("--retrieve_freq",type = int,default=1, 
+                    help="(online mode only) frequency of retrieving reference frames")
 parser.add_argument("--update_buffer_intv", type=int, default=1, 
                     help="the interval of updating the buffering set")
 parser.add_argument('--buffer_size', type=int, default=100, 

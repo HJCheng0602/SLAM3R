@@ -34,4 +34,6 @@ python recon.py \
 --conf_thres_i2p $CONF_THRES_I2P \
 --num_points_save $NUM_POINTS_SAVE \
 --update_buffer_intv $UPDATE_BUFFER_INTV \
---max_num_register $MAX_NUM_REGISTER
+--max_num_register $MAX_NUM_REGISTER \
+--online \
+--retrieve_freq 10 \

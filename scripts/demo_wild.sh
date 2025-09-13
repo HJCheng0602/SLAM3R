@@ -9,7 +9,6 @@
 ######################################################################################
 TEST_DATASET="data/wild/Library" 
 
-
 ######################################################################################
 # set the parameters for whole scene reconstruction below
 # for defination of these parameters, please refer to the recon.py
@@ -24,6 +23,7 @@ CONF_THRES_L2W=12
 CONF_THRES_I2P=1.5
 NUM_POINTS_SAVE=1000000
 
+RETRIEVE_FREQ=1
 UPDATE_BUFFER_INTV=1
 BUFFER_SIZE=100       # -1 if size is not limited
 BUFFER_STRATEGY="reservoir"  # or "fifo"
@@ -34,7 +34,7 @@ KEYFRAME_ADAPT_STRIDE=1
 
 GPU_ID=-1
 
-python -m cProfile -o my_stats_online.prof recon.py \
+python recon.py \
 --test_name $TEST_NAME \
 --dataset "${TEST_DATASET}" \
 --gpu_id $GPU_ID \
@@ -52,5 +52,6 @@ python -m cProfile -o my_stats_online.prof recon.py \
 --keyframe_adapt_min $KEYFRAME_ADAPT_MIN \
 --keyframe_adapt_max $KEYFRAME_ADAPT_MAX \
 --keyframe_adapt_stride $KEYFRAME_ADAPT_STRIDE \
+--retrieve_freq $RETRIEVE_FREQ \
 --save_preds \
 --online  # Uncomment it if you want to reconstruct it online

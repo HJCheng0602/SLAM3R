@@ -554,7 +554,6 @@ def scene_recon_pipeline_offline(i2p_model:Image2PointsModel,
     
     fail_view = {}
     for i,conf in enumerate(registered_confs_mean):
-        print(conf)
         if conf < 10:
             fail_view[i] = conf.item()
     print(f'mean confidence for whole scene reconstruction: {torch.tensor(registered_confs_mean).mean().item():.2f}')
