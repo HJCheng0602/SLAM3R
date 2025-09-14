@@ -1,6 +1,6 @@
 import argparse
-from slam3r.demo.app_offline import main_offline
-from slam3r.demo.app_online import main_online
+from slam3r.app.app_offline import main_offline
+from slam3r.app.app_online import main_online
 
 def get_args_parser():
     parser = argparse.ArgumentParser(description="A demo for our SLAM3R")

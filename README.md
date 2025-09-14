@@ -45,7 +45,7 @@ TL;DR: A real-time RGB SLAM system that performs dense 3D reconstruction via poi
 
 ## News
 
-* **2025-09:** We have released the code for WebCam input and online reconstruction.
+* **2025-09:** We have released the code for **WebCam input** and **online reconstruction**.
 
 * **2025-04:** SLAM3R is reported by [机器之心(Chinese)](https://mp.weixin.qq.com/s/fK5vJwbogcfwoduI9FuQ6w) 
 

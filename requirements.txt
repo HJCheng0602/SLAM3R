@@ -10,8 +10,3 @@ tensorboard
 pyglet<2
 huggingface-hub[torch]>=0.22
 pycuda
-vedo
-watchdog
-open3d
-viser
-line_profiler

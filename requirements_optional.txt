@@ -1,5 +1,6 @@
 # for visualization and evaluation
 open3d
+viser
 imageio[ffmpeg]
 scikit-image
 # for rendering depths in scannetpp

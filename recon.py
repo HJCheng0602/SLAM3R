@@ -1,5 +1,5 @@
-from slam3r.recon_online_pipeline import scene_recon_pipeline_online, FrameReader
-from slam3r.recon_offline_pipeline import scene_recon_pipeline_offline
+from slam3r.pipeline.recon_online_pipeline import scene_recon_pipeline_online, FrameReader
+from slam3r.pipeline.recon_offline_pipeline import scene_recon_pipeline_offline
 import argparse
 from slam3r.utils.recon_utils import * 
 from slam3r.datasets.wild_seq import Seq_Data

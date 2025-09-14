@@ -16,19 +16,13 @@ from slam3r.utils.device import to_numpy
 from slam3r.utils.recon_utils import * 
 from slam3r.datasets.get_webvideo import *
 from slam3r.utils.image import load_single_image
-from slam3r.recon_offline_pipeline import scene_frame_retrieve
+from slam3r.pipeline.recon_offline_pipeline import scene_frame_retrieve
 
 class FrameReader:
     """
     Read images from a directory, video file, or online video URL.
     Args:
         dataset (str): Path to the image directory, video file, or online video URL.
-    Returns:
-        type (str): Type of the input ('imgs', 'video', or 'https').
-    
-    read() (function): 
-        Function to read the next image/frame.
-    Returns (bool, image), where bool indicates success.
     """
     def __init__(self, dataset):
         self.dataset = dataset
@@ -54,7 +48,7 @@ class FrameReader:
             if not self.video_capture.isOpened():
                 print(f"error!can not open the video file{self.dataset}")
                 exit()
-            print("successful opened! start processing frame by frame...")
+            print(f"successful open the the video file {self.dataset}! start processing frame by frame...")
         elif self.type == "https":
             self.get_api = Get_online_video(self.dataset)
             
@@ -152,7 +146,7 @@ def get_single_img_tokens(views, model, silent=False):
                                                                silent=silent)
     return res_shape, res_feat, res_poses
 
-def get_raw_input_frame(input_type, data_views, rgb_imgs, current_frame_id, frame, args):
+def get_raw_input_frame(input_type, data_views, rgb_imgs, current_frame_id, frame, device):
     """ process the input image for reconstruction
 
     Args:
@@ -165,7 +159,7 @@ def get_raw_input_frame(input_type, data_views, rgb_imgs, current_frame_id, fram
     # Pre-save the RGB images along with their corresponding masks
     # in preparation for visualization at last.
     if input_type != "imgs":
-        frame = load_single_image(frame,224,"cuda")
+        frame = load_single_image(frame, 224, device)
     else:
         frame['true_shape'] = frame['true_shape'][0]
     data_views.append(frame)
@@ -180,7 +174,7 @@ def get_raw_input_frame(input_type, data_views, rgb_imgs, current_frame_id, fram
     for key in ['valid_mask', 'pts3d_cam', 'pts3d']:
         if key in data_views[current_frame_id]:
             del data_views[current_frame_id][key]
-    to_device(data_views[current_frame_id], device=args.device)
+    to_device(data_views[current_frame_id], device=device)
     
     return frame, data_views, rgb_imgs
     
@@ -199,8 +193,9 @@ def process_input_frame(per_frame_res, registered_confs_mean,
     return input_view, per_frame_res, registered_confs_mean
     
 
-def register_initial_window_frames(init_num, kf_stride, buffering_set_ids, input_views, 
-                                   l2w_model, args, per_frame_res, registered_confs_mean):
+def register_initial_window_frames(init_num, kf_stride, buffering_set_ids, 
+                                   input_views, l2w_model, per_frame_res, 
+                                   registered_confs_mean, device="cuda", norm_input=False):
     """
     initially register the frames within the initial window with L2W model
     """
@@ -214,8 +209,8 @@ def register_initial_window_frames(init_num, kf_stride, buffering_set_ids, input
         # (for defination of ref_ids, seee the doc of l2w_model)
         output = l2w_inference(l2w_input_views, l2w_model,
                                 ref_ids=list(range(1,len(l2w_input_views))),
-                                device=args.device,
-                                normalize=args.norm_input)
+                                device=device,
+                                normalize=norm_input)
         # process the output of L2W model
         input_views[view_id]['pts3d_world'] = output[0]['pts3d_in_other_view'] # 1,224,224,3
         conf_map = output[0]['conf'] # 1,224,224
@@ -394,16 +389,16 @@ def pointmap_local_recon(local_views, i2p_model,
     return local_confs_mean_up2now, per_frame_res, input_views, 
 
 def pointmap_global_register(ref_views, input_views, l2w_model,
-                             args, per_frame_res, registered_confs_mean, 
-                             current_frame_id):
+                             per_frame_res, registered_confs_mean, 
+                             current_frame_id, device="cuda", norm_input=False):
 
     view_to_register = input_views[current_frame_id]
     l2w_input_views = ref_views + [view_to_register]
     
     output = l2w_inference(l2w_input_views, l2w_model,
                             ref_ids=list(range(len(ref_views))),
-                            device=args.device,
-                            normalize=args.norm_input)
+                            device=device,
+                            normalize=norm_input)
     
     conf_map = output[-1]['conf'] # 1,224,224
 
@@ -510,7 +505,7 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
             frame, data_views, rgb_imgs = get_raw_input_frame(
                                                 frame_reader.type, data_views, 
                                                 rgb_imgs, current_frame_id, 
-                                                frame, args)
+                                                frame, args.device)
             input_view, per_frame_res, registered_confs_mean =\
                                 process_input_frame(per_frame_res, registered_confs_mean, 
                                                     data_views, current_frame_id, i2p_model)
@@ -542,8 +537,8 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
                 if kf_stride > 1:
                     max_conf_mean, input_views, per_frame_res = \
                         register_initial_window_frames(init_num, kf_stride, buffering_set_ids,
-                                                       input_views, l2w_model, args, per_frame_res, 
-                                                       registered_confs_mean)
+                                                       input_views, l2w_model, per_frame_res, 
+                                                       registered_confs_mean. args.device, args.norm_input)
                     # A problem is that the registered_confs_mean of the initial window is generated by I2P model,
                     # while the registered_confs_mean of the frames within the initial window is generated by L2W model,
                     # so there exists a gap. Here we try to align it.
@@ -574,8 +569,9 @@ def scene_recon_pipeline_online(i2p_model:Image2PointsModel,
 
             ref_views = [input_views[id] for id in ref_ids]
             input_views, per_frame_res, registered_confs_mean = pointmap_global_register(
-                                            ref_views, input_views, l2w_model, args, 
-                                            per_frame_res, registered_confs_mean, current_frame_id)
+                                            ref_views, input_views, l2w_model, 
+                                            per_frame_res, registered_confs_mean, current_frame_id,
+                                            device=args.device, norm_input=args.norm_input)
             
             next_frame_id = current_frame_id + 1
             if next_frame_id - milestone >= update_buffer_intv:

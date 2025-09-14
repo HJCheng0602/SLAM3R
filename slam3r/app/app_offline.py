@@ -7,11 +7,12 @@ import tempfile
 import functools
 import subprocess
 
-from slam3r.recon_offline_pipeline import get_img_tokens, initialize_scene, adapt_keyframe_stride, i2p_inference_batch, l2w_inference, normalize_views, scene_frame_retrieve
+from slam3r.pipeline.recon_offline_pipeline import get_img_tokens, initialize_scene, adapt_keyframe_stride, i2p_inference_batch, l2w_inference, normalize_views, scene_frame_retrieve
 from slam3r.datasets.wild_seq import Seq_Data
 from slam3r.models import Local2WorldModel, Image2PointsModel
 from slam3r.utils.device import to_numpy
 from slam3r.utils.recon_utils import *
+
 def extract_frames(video_path: str, fps: float) -> str:
     temp_dir = tempfile.mkdtemp()
     output_path = os.path.join(temp_dir, "%03d.jpg")
@@ -583,8 +584,8 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
     demo.launch(share=False, server_name=server_name, server_port=server_port)
 
 
-def main_offline(parser):
-
+def main_offline(parser: argparse.ArgumentParser):
+    
     args = parser.parse_args()
 
     if args.tmp_dir is not None:
@@ -609,4 +610,4 @@ def main_offline(parser):
         main_demo(i2p_model, l2w_model, args.device, tmpdirname, server_name, args.server_port)
 
 if __name__ == "__main__":
-    main_offline()
+    main_offline(argparse.ArgumentParser())
