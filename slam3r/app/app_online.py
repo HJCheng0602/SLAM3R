@@ -316,9 +316,7 @@ def get_model_from_scene(per_frame_res, save_dir,
 
 def display_inputs(images):
     img_label = "Click or use the left/right arrow keys to browse images", 
-    print("-------------------------")
-    print(images)
-    print("-------------------------")
+       
 
     if images is None or len(images) == 0: 
         return [gradio.update(label=img_label, value=None, visible=False, 
