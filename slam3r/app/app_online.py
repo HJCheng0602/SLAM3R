@@ -360,24 +360,32 @@ def change_inputfile_type(input_type):
     update_external_webcam_html = gradio.update(visible=False)
     update_video_fps = gradio.update(visible=False, value=1, scale=0) 
     update_url = gradio.update(visible=False)
+    image_gallery = gradio.update(visible=True)
+    video_gallery = gradio.update(visible=True)
 
     if input_type == "directory":
         update_file = gradio.update(file_count="directory", file_types=["image"],
                                  label="Select a directory containing images", visible=True, value=None) 
+        video_gallery = gradio.update(visible=False)
     elif input_type == "images":
         update_file = gradio.update(file_count="multiple", file_types=["image"],
                                  label="Upload multiple images", visible=True, value=None)
+        video_gallery = gradio.update(visible=False)
     elif input_type == "video":
         update_file = gradio.update(file_count="single", file_types=["video"],
                                  label="Upload a mp4 video", visible=True, value=None)
         update_video_fps = gradio.update(interactive=True, scale=1, visible=True, value=5) 
+        image_gallery = gradio.update(visible=False)
     elif input_type == "webcamera":
         update_external_webcam_html = gradio.update(visible=True)
         update_url = gradio.update(visible=True)
         update_video_fps = gradio.update(interactive=True, scale = 1, visible=True, value = 5)
+        image_gallery = gradio.update(visible=False)
+        video_gallery = gradio.update(visible=False)
 
     return update_file, update_webcam, update_external_webcam_html,\
-            update_video_fps, update_url,update_url,update_url,update_url
+            update_video_fps, update_url,update_url,update_url,update_url,\
+                image_gallery, video_gallery
     
 def change_kf_stride_type(kf_stride):
     max_kf_stride = 10
@@ -537,7 +545,7 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                 inputs=[input_type],
                                 outputs=[inputfiles, inputfiles_webcam, inputfiles_external_webcam_html, 
                                          video_extract_fps,input_url_web_cam, 
-                                         confirm_button, web_cam_account, web_cam_password])
+                                         confirm_button, web_cam_account, web_cam_password, image_gallery, video_gallery])
             kf_stride.change(change_kf_stride_type,
                                 inputs=[kf_stride],
                                 outputs=[kf_stride_fix])
