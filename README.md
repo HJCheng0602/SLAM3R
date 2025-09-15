@@ -134,7 +134,7 @@ When `--save_preds` is set in the script, the per-frame prediction for reconstru
 
 A Open3D window will appear after running the script. Please click `space key` to record the adjusted rendering view and close the window. The code will then do the rendering of the incremental reconstruction.
 
-You can also run SLAM3R on your self-captured video or [WebCam](https://github.com/shenyaocn/IP-Camera-Bridge) with the steps above. You can also select `offline/online` mode for reconstruction. Check the comments in the [script](./scripts/demo_wild.sh) for more details.
+You can also run SLAM3R on your self-captured video or [WebCam](https://github.com/shenyaocn/IP-Camera-Bridge) with the steps above. You can also select `offline/online` mode for reconstruction. Check the parameters in the [script](./scripts/demo_wild.sh) for more details.
 
 Here are [more tips](./docs/recon_tips.md) for the argument settings in the reconstruction script.
 
@@ -157,7 +157,7 @@ Meanwhile, the online interface can be launched with the following command:
 ```bash
 python app.py --online
 ```
-Here is a demo GIF for the Gradio interface for online reconstruction (accelerated). A Viser viewer is attached to show the incremental reconstruction process.
+Here is a demo GIF for the Gradio interface for online reconstruction (accelerated). A Viser viewer is plugged in to show the incremental reconstruction process.
 
 <img src="media/gradio_online.gif" style="zoom: 66%;" />
 

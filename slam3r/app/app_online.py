@@ -50,6 +50,8 @@ def recon_scene(i2p_model:Image2PointsModel,
     num_frame_pass = 0
     num_frame_read = 0
 
+    point_cloud_queue.put(None)
+
     while True:
         success, frame = dataset.read()
         if not success:
@@ -161,7 +163,6 @@ def recon_scene(i2p_model:Image2PointsModel,
                                      save_dir=save_dir, 
                                      num_points_save=num_points_save, 
                                      conf_thres_res=conf_thres_l2w)
-    point_cloud_queue.put(None)
     return save_path, per_frame_res
 
 def server_viser(args):
@@ -187,14 +188,19 @@ def server_viser(args):
 
     conf_thres_res = 12
     num_points_per_frame = 10000
+    # max_num_points_all = 2000000
     
     while True:
         try:
             new_data = point_cloud_queue.get(block=True, timeout=0.1)
             
             if new_data is None:
-                print("consumer: received termination signal.")
-                break
+                print("Viser: start a new round of visualization with empty point cloud.")
+                points_buffer = np.zeros((0, 3), dtype=np.float32)
+                colors_buffer = np.zeros((0, 3), dtype=np.uint8)
+                point_cloud_handle.points = points_buffer
+                point_cloud_handle.colors = colors_buffer
+                continue
 
             new_frame_points_data, new_frame_colors_data, new_frame_confs_data = new_data
             if isinstance(new_frame_points_data, torch.Tensor):
@@ -230,27 +236,35 @@ def server_viser(args):
             n_samples = min(num_points_per_frame, n_points_in_frame)
             
             if n_samples > 0:
-                sampled_idx = np.random.choice(n_points_in_frame, n_samples, replace=False)
-                sampled_pts = filtered_points[sampled_idx]
-                sampled_colors = filtered_colors[sampled_idx]
+                if n_points_in_frame > n_samples:
+                    sampled_idx = np.random.choice(n_points_in_frame, n_samples, replace=False)
+                    sampled_pts = filtered_points[sampled_idx]
+                    sampled_colors = filtered_colors[sampled_idx]
+                else:
+                    sampled_pts = filtered_points
+                    sampled_colors = filtered_colors
                 points_buffer = np.concatenate((points_buffer, sampled_pts), axis=0)
                 colors_buffer = np.concatenate((colors_buffer, sampled_colors), axis=0)
 
+                # if len(points_buffer) > max_num_points_all * 1.5: # avoid frequent sampling
+                #     choice = np.random.choice(len(points_buffer), max_num_points_all, replace=False)
+                #     points_buffer = points_buffer[choice]
+                #     colors_buffer = colors_buffer[choice]
                 point_cloud_handle.points = points_buffer
                 point_cloud_handle.colors = colors_buffer
             
-                print(f"consumer: point cloud updated with {n_samples} new points,\
+                print(f"Viser: point cloud updated with {n_samples} new points,\
                     total {len(points_buffer)} points now.")
             else:
-                print("consumer: no points passed the confidence threshold in this frame.")
-
+                print("Viser: no points passed the confidence threshold in this frame.")
+                
         except Empty:
             pass
         except Exception as e:
-            print(f"consumer: encountered an error: {e}")
+            print(f"Viser: encountered an error: {e}")
             break
             
-    print("consumer: exiting visualization thread.")
+    print("Viser: exiting visualization thread.")
     
 def get_model_from_scene(per_frame_res, save_dir, 
                          num_points_save=200000, 
