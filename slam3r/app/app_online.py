@@ -171,7 +171,7 @@ def server_viser(args):
     else:
         server_name = '0.0.0.0' if args.local_network else '127.0.0.1'
     
-    server = viser.ViserServer(host=server_name, port=args.viser_server_port)
+    server = viser.ViserServer(host=server_name, port=args.viser_server_port, verbose=False)
     global viser_server_url
     viser_server_url = f"http://{server.get_host()}:{server.get_port()}"
     
@@ -316,6 +316,9 @@ def get_model_from_scene(per_frame_res, save_dir,
 
 def display_inputs(images):
     img_label = "Click or use the left/right arrow keys to browse images", 
+    print("-------------------------")
+    print(images)
+    print("-------------------------")
 
     if images is None or len(images) == 0: 
         return [gradio.update(label=img_label, value=None, visible=False, 
@@ -333,6 +336,7 @@ def display_inputs(images):
             return [gradio.update(label=img_label, value=None, visible=False, 
                                   selected_index=0, scale=2, preview=True, height=300,),
                     gradio.update(value=None, visible=False, scale=2, height=300,)] 
+    
             
     return [gradio.update(label=img_label, value=images, visible=True, 
                           selected_index=0, scale=2, preview=True, height=300,),
@@ -593,10 +597,8 @@ def main_online(parser:argparse.ArgumentParser):
     args = parser.parse_args()
     
     displayer = threading.Thread(target=server_viser, args=(args, ))
-    productor = threading.Thread(target=server_gradio, args=(args, ))
-    
-    productor.start()
     displayer.start()
+    server_gradio(args)
     
 if __name__ == "__main__":
     main_online(argparse.ArgumentParser())
