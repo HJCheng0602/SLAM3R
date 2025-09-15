@@ -16,6 +16,7 @@ from slam3r.datasets.get_webvideo import *
 from slam3r.pipeline.recon_online_pipeline import *
 
 point_cloud_queue = Queue()
+viser_server_url = None
 
 def recon_scene(i2p_model:Image2PointsModel, 
                 l2w_model:Local2WorldModel, 
@@ -163,8 +164,17 @@ def recon_scene(i2p_model:Image2PointsModel,
     point_cloud_queue.put(None)
     return save_path, per_frame_res
 
-def server_viser():
-    server = viser.ViserServer()
+def server_viser(args):
+    
+    if args.server_name is not None:
+        server_name = args.server_name
+    else:
+        server_name = '0.0.0.0' if args.local_network else '127.0.0.1'
+    
+    server = viser.ViserServer(host=server_name, port=args.viser_server_port)
+    global viser_server_url
+    viser_server_url = f"http://{server.get_host()}:{server.get_port()}"
+    
     points_buffer = np.zeros((0, 3), dtype=np.float32)
     colors_buffer = np.zeros((0, 3), dtype=np.uint8)
 
@@ -172,7 +182,7 @@ def server_viser():
         name="/reconstruction_cloud",
         points=points_buffer,
         colors=colors_buffer,
-        point_size=0.001
+        point_size=0.001,
     )
 
     conf_thres_res = 12
@@ -191,6 +201,14 @@ def server_viser():
                 new_frame_points = new_frame_points_data.cpu().numpy()
             else:
                 new_frame_points = new_frame_points_data
+            # new_frame_points[..., 0] *= -1 # flip the axis for better visualization    
+            # new_frame_points[..., 2] *= -1 # flip the axis for better visualization    
+            new_frame_points1 = new_frame_points.copy()
+            new_frame_points1[..., 0] *= -1
+            new_frame_points1[..., 1] = -new_frame_points[..., 2]
+            new_frame_points1[..., 2] = -new_frame_points[..., 1]
+            new_frame_points = new_frame_points1
+            
             if isinstance(new_frame_colors_data, torch.Tensor):
                 new_frame_colors = new_frame_colors_data.cpu().numpy().astype(np.uint8)
             else:
@@ -286,7 +304,7 @@ def get_model_from_scene(per_frame_res, save_dir,
     sampled_idx = np.random.choice(valid_ids, n_samples, replace=False)
     sampled_pts = res_pcds[sampled_idx]
     sampled_rgbs = res_rgbs[sampled_idx]
-    sampled_pts[:, :2] *= -1 # flip the x,y axis for better visualization
+    sampled_pts *= -1 # flip the axis for better visualization
     
     save_name = f"recon.glb"
     scene = trimesh.Scene()
@@ -488,11 +506,12 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                       interactive=True, 
                                       label="number of points sampled from the result",
                                       )
+            
             with gradio.Row():
-                outmodel = gradio.Model3D(height=500,
-                                        clear_color=(0.,0.,0.,0.3)) 
-                
-                outtext = gradio.HTML('<iframe src="http://localhost:8080" width="100%" height="600px" style="border:none;"></iframe>', visible=True)
+                outviser = gradio.HTML(f'<iframe src="{viser_server_url}" width="100%" height="500px" style="border:none;"></iframe>', visible=True)
+            
+            with gradio.Row():
+                outmodel = gradio.Model3D(height=500, clear_color=(0.,0.,0.,0.3)) 
                 
             # events
             inputfiles.change(display_inputs,
@@ -573,8 +592,8 @@ def server_gradio(args):
 def main_online(parser:argparse.ArgumentParser):
     args = parser.parse_args()
     
-    productor = threading.Thread(target=server_gradio,args=(args, ))
-    displayer = threading.Thread(target=server_viser)
+    displayer = threading.Thread(target=server_viser, args=(args, ))
+    productor = threading.Thread(target=server_gradio, args=(args, ))
     
     productor.start()
     displayer.start()
