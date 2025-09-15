@@ -29,13 +29,16 @@ class FrameReader:
         self.type = ""
         self.count = 0
         self.readnum = 0
-        if dataset.find(":") != -1:
-            self.type = "https"
-        else:
-            if dataset[-3:] == "mp4":
-                self.type = "video"
+        if isinstance(dataset, str):
+            if dataset.find(":") != -1:
+                self.type = "https"
             else:
-                self.type = "imgs"
+                if dataset[-3:] == "mp4":
+                    self.type = "video"
+                else:
+                    self.type = "imgs"
+        else:
+            self.type = "imgs"
         if self.type == "imgs":
             print('loading dataset: ', self.dataset)
             self.data = Seq_Data(img_dir=self.dataset,  \
