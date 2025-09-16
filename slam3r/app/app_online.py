@@ -318,6 +318,7 @@ def get_model_from_scene(per_frame_res, save_dir,
     sampled_idx = np.random.choice(valid_ids, n_samples, replace=False)
     sampled_pts = res_pcds[sampled_idx]
     sampled_rgbs = res_rgbs[sampled_idx]
+    
     sampled_pts *= -1 # flip the axis for better visualization
     
     save_name = f"recon.glb"
@@ -432,11 +433,11 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                     input_type = gradio.Dropdown([ "directory", "images", "video", "webcamera"],
                                                 scale=1,
                                                 value='directory', label="select type of input files")
-                    video_extract_fps = gradio.Number(value=1,
+                    frame_extract_interval = gradio.Number(value=1,
                                                     scale=0,
                                                     interactive=True,
                                                     visible=False,
-                                                    label="fps for extracting frames from video")
+                                                    label="Interval for extracting frames from video/webcamera",)
                     input_url_web_cam = gradio.Textbox(label="your ip camera's url",
                                                    visible=False,
                                                    interactive=True
@@ -532,10 +533,8 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                       )
             
             with gradio.Row():
-                outviser = gradio.HTML(f'<iframe src="{viser_server_url}" width="100%" height="500px" style="border:none;"></iframe>', visible=True)
-            
-            with gradio.Row():
                 outmodel = gradio.Model3D(height=500, clear_color=(0.,0.,0.,0.3)) 
+                outviser = gradio.HTML(f'<iframe src="{viser_server_url}" width="100%" height="500px" style="border:none;"></iframe>', visible=True)
                 
             # events
             inputfiles.change(display_inputs,
@@ -544,7 +543,7 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
             input_type.change(change_inputfile_type,
                                 inputs=[input_type],
                                 outputs=[inputfiles, inputfiles_webcam, inputfiles_external_webcam_html, 
-                                         video_extract_fps,input_url_web_cam, 
+                                         frame_extract_interval,input_url_web_cam, 
                                          confirm_button, web_cam_account, web_cam_password, image_gallery, video_gallery])
             kf_stride.change(change_kf_stride_type,
                                 inputs=[kf_stride],
@@ -553,7 +552,7 @@ def main_demo(i2p_model, l2w_model, device, tmpdirname, server_name, server_port
                                 inputs=[buffer_strategy],
                                 outputs=[buffer_size])
             run_btn.click(fn=recon_scene_func,
-                          inputs=[tmpdir_name, video_extract_fps,
+                          inputs=[tmpdir_name, frame_extract_interval,
                                   input_type, auth_url,
                                   inputfiles, kf_stride_fix, win_r, initial_winsize, conf_thres_i2p,
                                   num_scene_frame, update_buffer_intv, buffer_strategy, buffer_size,
@@ -580,8 +579,8 @@ def change_web_camera_url(inputs_external_webcam, web_url, web_cam_account, web_
 
     inputs_external_webcam = gradio.HTML(
                     f"""
-                    <p>Web Camera presentation：</p>
-                    <iframe src="{web_url}" width="100%" height="600px" style="border:none;"></iframe>
+                    <p>Web Camera presentation:</p>
+                    <iframe src="{web_url}" width="100%" height="400px" style="border:none;"></iframe>
                     """,
                     visible=True,
                 )
